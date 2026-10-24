@@ -16,6 +16,10 @@ A browser-based MS2133 firmware backup and flashing tool. Use the HTTPS site or 
 
 浏览器设备授权及 IndexedDB / localStorage 持久记录按 **origin（协议、主机、端口）** 隔离，而非按仓库路径隔离。Pages 使用 `https://cryomachine.github.io`，本地启动器使用 `http://127.0.0.1:17333`，开发页使用 `http://127.0.0.1:1430`；三者的授权和记录互不共享。在 Pages 与 localhost 之间切换时，需要重新授权设备并导入磁盘备份。更换浏览器或清除站点数据也可能清除授权或本机记录。
 
+## 目前支持的设备
+
+- **OCAP V3（MS2133）**
+
 ## 功能与边界
 
 | 功能 | 行为 |
