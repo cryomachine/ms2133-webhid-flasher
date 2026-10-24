@@ -1,0 +1,65 @@
+# Dependencies and build products
+node_modules/
+dist/
+build/
+release/
+coverage/
+.vite/
+*.tsbuildinfo
+/ms2133-flasher
+/ms2133-flasher.exe
+*.app/
+*.exe
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Firmware, ROMs and device images: never commit these files.
+*.bin
+*.rom
+*.hex
+*.fw
+*.img
+*.dump
+*.flash
+*.eeprom
+*.ihex
+*.uf2
+*.[bB][iI][nN]
+*.[rR][oO][mM]
+*.[hH][eE][xX]
+*.[fF][wW]
+*.[iI][mM][gG]
+*.[dD][uU][mM][pP]
+*.[fF][lL][aA][sS][hH]
+*.[eE][eE][pP][rR][oO][mM]
+*.[iI][hH][eE][xX]
+*.[uU][fF]2
+
+# User backups, recovery packages and local operation data
+backups/
+backup/
+recoveries/
+recovery/
+MS2133-before-*
+MS2133-backup-*
+MS2133-recovery-*
+*-backup.json
+*-recovery.json
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# Generated test and Python artifacts
+tests/*.test-bundle.mjs
+__pycache__/
+*.py[cod]
+*.tmp

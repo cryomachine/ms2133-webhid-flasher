@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Check that source contains no firmware or backups
+        run: npm run check:source
+      - name: Run offline tests
+        run: npm test
+      - name: Build browser application
+        run: npm run build
+      - name: Build static launcher
+        run: go build -trimpath -o "$RUNNER_TEMP/ms2133-flasher" .
