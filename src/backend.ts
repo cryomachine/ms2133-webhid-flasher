@@ -98,7 +98,7 @@ async function scan(): Promise<ScanResult> {
     let item: DeviceInfo = {
       id, path: `WebHID授权接口 ${id}`, vendorId: device.vendorId, productId: device.productId,
       product: device.productName || (device.productId === ROM_PRODUCT_ID ? "MS213xS ROM恢复接口" : device.productId === MS2133_PRODUCT_ID ? "MS2133" : `MS2133 HID接口 (PID ${device.productId.toString(16).padStart(4, "0").toUpperCase()})`), usagePage: collection?.usagePage, usage: collection?.usage,
-      featureReportLength: reportLength(device.collections), status: "enumerated",
+      featureReportLength: reportLength(device.collections), status: "enumerated", firmwareType: "unknown",
       canReadFlash: false, canWriteFlash: false,
       detail: driver ? "尚未完成通信探测" : "已取得浏览器授权；协议模块尚未加载，写入未开放。",
     };

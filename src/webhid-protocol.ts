@@ -152,12 +152,12 @@ function delay(milliseconds: number): Promise<void> { return new Promise(resolve
 async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo>> {
   probes.set(device, { mode: null, readCapable: false });
   legacyEnvelopes.delete(device);
-  const base: Partial<DeviceInfo> = { canReadFlash: false, canWriteFlash: false };
+  const base: Partial<DeviceInfo> = { canReadFlash: false, canWriteFlash: false, firmwareType: "unknown" };
   if (device.vendorId !== MS2133_VENDOR_ID)
     return { ...base, status: "error", detail: "所选接口的厂商ID不是MS2133，未发送设备命令。" };
   const sizes = featureSizes(device.collections);
   const size = sizes.get(REPORT_ID) ?? 0;
-  if (device.productId === ROM_PRODUCT_ID) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
+  if (device.productId === ROM_PRODUCT_ID) return { ...base, firmwareType: "rom", featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
   if (size < 8) return { ...base, status: "error", detail: "接口未声明报告ID 1的8字节命令区，未发送设备命令。" };
   const legacy = legacyShape(device, sizes);
   if (legacy) {
@@ -167,6 +167,7 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
         await legacyReadSfr(device, 0xa0);
         return {
           ...base,
+          firmwareType: "stock" as const,
           featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1,
           status: "reachable" as const,
           canReadFlash: true,
@@ -180,7 +181,7 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
       return result;
     } catch (error) {
       probes.set(device, {mode: null, readCapable: false});
-      return { ...base, featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1, status: "error", detail: `原厂HID接口通信失败，未执行擦写。${errorText(error)}` };
+      return { ...base, firmwareType: "stock", featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1, status: "error", detail: `原厂HID接口通信失败，未执行擦写。${errorText(error)}` };
     }
   }
   // BFC selects this ROI extension only for native length 265 (264 data bytes).
@@ -200,7 +201,7 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
           const detail = readCapable
             ? `长报文能力与被动状态查询通过；${state.active ? "当前维护会话已开启，备份前将先清理并重新进入" : "备份时将暂停视频并进入维护会话"}。写入前仍将验证容器、完整备份并等待备份保存确认。`
             : "短报文可通信；长报文Flash读取能力未确认，备份和擦写均未开放。";
-          return { ...base, featureReportLength: size ? size + 1 : null, status: state.active ? "update" : "reachable", detail, canReadFlash: readCapable, canWriteFlash: readCapable };
+          return { ...base, firmwareType: "roi", featureReportLength: size ? size + 1 : null, status: state.active ? "update" : "reachable", detail, canReadFlash: readCapable, canWriteFlash: readCapable };
         } catch (error) {
           failures.push(`${mode === "extended" ? "长" : "短"}报文：${errorText(error)}`);
           if (error instanceof PendingHidOperationError) throw error;
@@ -210,7 +211,7 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
     });
   } catch (error) {
     probes.set(device, { mode: null, readCapable: false });
-    return { ...base, status: "error", featureReportLength: size ? size + 1 : null, detail: `设备已枚举，HID通信未通过；未执行擦写。${errorText(error)}` };
+    return { ...base, firmwareType: size === 264 ? "roi" : "unknown", status: "error", featureReportLength: size ? size + 1 : null, detail: `设备已枚举，HID通信未通过；未执行擦写。${errorText(error)}` };
   }
 }
 async function exitMaintenance(device: BrowserHidDevice): Promise<void> {

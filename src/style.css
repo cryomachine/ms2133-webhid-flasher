@@ -73,6 +73,10 @@ h3 { font-size: 14px; font-weight: 650; }
 .status-pill.update { background: #e8eff9; color: #4d6e98; }
 .status-pill.busy { background: #fff4df; color: #997234; }
 .status-pill.error { background: #faeae7; color: #a8594b; }
+.status-pill.firmware-type.stock { background: #e5f3e9; color: #2f7651; }
+.status-pill.firmware-type.roi { background: #e8eff9; color: #4d6e98; }
+.status-pill.firmware-type.rom { background: #fff4df; color: #997234; }
+.status-pill.firmware-type.unknown { background: #eef1f3; color: #647783; }
 .device-identifiers { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 10px; margin: 8px 0 0 21px; font-variant-numeric: tabular-nums; }
 .device-detail { margin: 8px 0 0 21px; font-size: 11px; color: #72827a; line-height: 1.7; overflow-wrap: anywhere; }
 .capability-row { flex-wrap: wrap; gap: 12px; margin-top: 14px; }
@@ -194,6 +198,7 @@ footer { display: flex; align-items: center; justify-content: center; gap: 7px; 
 .lab-device-row:hover { border-color: #a9c6b6; background: #fafcfb; }
 .lab-device-row.selected { border-color: #4b947a; background: var(--accent-soft); box-shadow: inset 0 0 0 1px #4b947a18; }
 .lab-device-row > div { display: grid; gap: 4px; min-width: 0; }
+.lab-device-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .lab-device-row strong { font-size: 12px; overflow-wrap: anywhere; }
 .lab-device-row span:not(.status-pill) { color: var(--muted); font-size: 10px; }
 .lab-details { display: grid; gap: 8px; margin-top: 15px; padding-top: 13px; border-top: 1px solid #edf0ed; font-size: 11px; line-height: 1.7; }

@@ -1,4 +1,5 @@
 export type DeviceStatus = "enumerated" | "reachable" | "update" | "busy" | "error";
+export type FirmwareInterface = "stock" | "roi" | "rom" | "unknown";
 export interface DeviceInfo {
   id: string;
   path: string;
@@ -12,6 +13,7 @@ export interface DeviceInfo {
   usage?: number | null;
   featureReportLength?: number | null;
   status: DeviceStatus;
+  firmwareType?: FirmwareInterface;
   detail?: string | null;
   canReadFlash: boolean;
   canWriteFlash: boolean;

@@ -54,8 +54,8 @@ export class StockDevice {
 }
 export function context(d){const updates=[],backups=[],logs=[];return {operationMode:'flash',updates,backups,logs,update(v){updates.push(v);},log(message){logs.push(message);},isCancelled(){return false;},async saveBackup(b){assert.equal(d.erased.length,0);backups.push(b.slice());}};}
 test('precise stock descriptor probes B5/C5 only, and ROM is enumerated without guesses',async()=>{
-  const d=new StockDevice();const p=await webHidDriver.probe(d);assert.equal(p.canReadFlash,true);assert.equal(p.canWriteFlash,true);assert.equal(p.featureReportLength,9);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
-  const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.canWriteFlash,false);assert.equal(rom.calls,0);assert.match(r.detail,/ROM/);
+  const d=new StockDevice();const p=await webHidDriver.probe(d);assert.equal(p.canReadFlash,true);assert.equal(p.canWriteFlash,true);assert.equal(p.firmwareType,'stock');assert.equal(p.featureReportLength,9);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
+  const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.firmwareType,'rom');assert.equal(r.canWriteFlash,false);assert.equal(rom.calls,0);assert.match(r.detail,/ROM/);
 });
 test('Windows descriptor variant with ID-inclusive large reports remains stock SPI',async()=>{
   const d=new StockDevice();

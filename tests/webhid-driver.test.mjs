@@ -66,6 +66,7 @@ test('Windows PID variants are accepted only after the same descriptor and proto
   device.productId = 0x0000;
   const info = await webHidDriver.probe(device);
   assert.equal(info.status, 'reachable');
+  assert.equal(info.firmwareType, 'roi');
   assert.equal(info.canReadFlash, true);
   assert.deepEqual(device.calls.map(call => call.data.slice(0, 2)), [[0x52, 0]]);
 });
@@ -86,6 +87,7 @@ test('read-only probe sends no stop, factory, erase, or program commands', async
   assert.equal(info.canReadFlash, true);
   assert.equal(info.canWriteFlash, true);
   assert.equal(info.status, 'reachable');
+  assert.equal(info.firmwareType, 'roi');
   assert.deepEqual(device.calls.map(call => call.data.slice(0,2)), [[0x52,0]]);
   assert.equal(device.opened, false);
 });

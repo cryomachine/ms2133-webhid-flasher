@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { callBackend as invoke, requestWebDevice, webMode } from "./backend";
 import "./webhid-protocol";
-import type { DeviceInfo, FirmwareInfo, LogEntry, OperationState, ScanResult } from "./types";
+import type { DeviceInfo, FirmwareInfo, FirmwareInterface, LogEntry, OperationState, ScanResult } from "./types";
 import type { RecoverySummary } from "./storage";
 import { runSixModeCaptureTest, SIX_CAPTURE_TEST_MODES } from "./video-mode-test";
 import type { SixCaptureTestResult, VideoModeDescriptor } from "./video-mode-test";
@@ -27,6 +27,7 @@ function Icon({ name, spin = false }: { name: "usb" | "refresh" | "file" | "down
 const hex = (value?: number | null) => value == null ? "—" : `0x${value.toString(16).toUpperCase().padStart(4, "0")}`;
 const size = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 const statusName: Record<DeviceInfo["status"], string> = { enumerated: "已枚举", reachable: "可通信", update: "升级接口", busy: "接口占用", error: "探测异常" };
+const firmwareInterfaceName: Record<FirmwareInterface, string> = { stock: "原厂固件", roi: "ROI裁剪固件", rom: "ROM恢复接口", unknown: "固件类型未确认" };
 const errorText = (e: unknown) => typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
 type NativeVideoConstraints = MediaTrackConstraints & { resizeMode?: ConstrainDOMString };
 type ExtendedMediaTrackCapabilities = MediaTrackCapabilities & { resizeMode?: string[] };
@@ -475,7 +476,7 @@ function LabPreview({ devices, selectedId, onSelect, onRefresh, scanning }: {
     <div className="lab-grid">
       <section className="panel lab-card" aria-labelledby="lab-device-heading">
         <div className="section-heading"><div className="heading-title"><Icon name="usb"/><h2 id="lab-device-heading">已连接设备</h2></div><button className="button small" onClick={onRefresh} disabled={scanning}><Icon name="refresh" spin={scanning}/>{scanning ? "读取中" : "刷新"}</button></div>
-        {devices.length === 0 ? <div className="empty-state"><Icon name="usb"/><h3>尚未连接设备</h3><p>连接采集卡后点击刷新。</p></div> : <div className="lab-device-list">{devices.map(device => <button key={device.id} className={`lab-device-row ${selectedId === device.id ? "selected" : ""}`} onClick={() => onSelect(device.id)}><div><strong>{device.product || "MS213x 设备"}</strong><span>VID {hex(device.vendorId)} · PID {hex(device.productId)}</span></div><span className={`status-pill ${device.status}`}>{statusName[device.status]}</span></button>)}</div>}
+        {devices.length === 0 ? <div className="empty-state"><Icon name="usb"/><h3>尚未连接设备</h3><p>连接采集卡后点击刷新。</p></div> : <div className="lab-device-list">{devices.map(device => <button key={device.id} className={`lab-device-row ${selectedId === device.id ? "selected" : ""}`} onClick={() => onSelect(device.id)}><div><strong>{device.product || "MS213x 设备"}</strong><span>VID {hex(device.vendorId)} · PID {hex(device.productId)}</span></div><span className="lab-device-status"><span className={`status-pill firmware-type ${device.firmwareType ?? "unknown"}`}>{firmwareInterfaceName[device.firmwareType ?? "unknown"]}</span><span className={`status-pill ${device.status}`}>{statusName[device.status]}</span></span></button>)}</div>}
       </section>
       <section className="panel lab-card" aria-labelledby="lab-roi-heading">
         <div className="section-heading"><div className="heading-title"><Icon name="check"/><h2 id="lab-roi-heading">硬件裁剪模式检测</h2></div></div>
@@ -639,11 +640,11 @@ function App() {
             <div className="section-heading"><div className="heading-title"><span className="step">01</span><h2 id="device-heading">连接设备</h2></div><div className="connect-actions">{webMode && <button className="button small connect-button" onClick={() => void connect()} disabled={busy || scanning}><Icon name="usb"/>连接采集卡</button>}<button className="button small" onClick={() => void scan()} disabled={scanning || busy}><Icon name="refresh" spin={scanning}/>{scanning ? "扫描中" : "刷新设备"}</button></div></div>
             <div className="device-list" role="radiogroup" aria-label="采集卡接口">
               {devices.length === 0 ? <div className="empty-state"><Icon name="usb"/><h3>{scanning ? "正在读取设备列表" : "等待连接采集卡"}</h3><p>{scanning ? "正在读取 USB 与 HID 枚举信息。" : webMode ? "点击“连接采集卡”，在浏览器弹窗中选择设备。" : "通过 USB 连接采集卡后，点击“刷新设备”。"}</p></div> : devices.map(item => <button key={item.id} className={`device-card ${selectedId === item.id ? "selected" : ""}`} role="radio" aria-checked={selectedId === item.id} onClick={() => setSelectedId(item.id)} disabled={busy}>
-                <div className="device-title"><span className="radio-dot"/><strong>{item.product || "USB 采集设备"}</strong><span className={`status-pill ${item.status}`}>{statusName[item.status]}</span></div>
+                <div className="device-title"><span className="radio-dot"/><strong>{item.product || "USB 采集设备"}</strong><span className={`status-pill firmware-type ${item.firmwareType ?? "unknown"}`}>{firmwareInterfaceName[item.firmwareType ?? "unknown"]}</span><span className={`status-pill ${item.status}`}>{statusName[item.status]}</span></div>
                 <div className="device-identifiers"><span>VID {hex(item.vendorId)}</span><span>PID {hex(item.productId)}</span><span>接口 {item.interfaceNumber ?? "—"}</span></div>
               </button>)}
             </div>
-            {device && <><div className="capability-row"><span className={`capability ${device.canReadFlash ? "ready" : ""}`}><Icon name={device.canReadFlash ? "check" : "alert"}/>{device.canReadFlash ? "备份通道预检通过" : "备份通道未就绪"}</span><span className={`capability ${device.canWriteFlash ? "ready" : ""}`}><Icon name={device.canWriteFlash ? "check" : "alert"}/>{device.canWriteFlash ? "写入校验预检通过" : "写入通道未就绪"}</span></div><details className="technical-details"><summary>所选接口详情</summary><dl className="detail-list"><div><dt>设备路径</dt><dd>{device.path}</dd></div><div><dt>Usage page / usage</dt><dd>{hex(device.usagePage)} / {hex(device.usage)}</dd></div><div><dt>Feature report（含 ID）</dt><dd>{device.featureReportLength == null ? "尚未确认" : `${device.featureReportLength} 字节`}</dd></div><div><dt>序列号</dt><dd>{device.serial || "当前接口未提供"}</dd></div><div><dt>协议探测</dt><dd>{device.detail || "—"}</dd></div></dl></details></>}
+            {device && <><div className="capability-row"><span className={`capability ${device.canReadFlash ? "ready" : ""}`}><Icon name={device.canReadFlash ? "check" : "alert"}/>{device.canReadFlash ? "备份通道预检通过" : "备份通道未就绪"}</span><span className={`capability ${device.canWriteFlash ? "ready" : ""}`}><Icon name={device.canWriteFlash ? "check" : "alert"}/>{device.canWriteFlash ? "写入校验预检通过" : "写入通道未就绪"}</span></div><details className="technical-details"><summary>所选接口详情</summary><dl className="detail-list"><div><dt>设备路径</dt><dd>{device.path}</dd></div><div><dt>固件接口</dt><dd><span className={`status-pill firmware-type ${device.firmwareType ?? "unknown"}`}>{firmwareInterfaceName[device.firmwareType ?? "unknown"]}</span></dd></div><div><dt>Usage page / usage</dt><dd>{hex(device.usagePage)} / {hex(device.usage)}</dd></div><div><dt>Feature report（含 ID）</dt><dd>{device.featureReportLength == null ? "尚未确认" : `${device.featureReportLength} 字节`}</dd></div><div><dt>序列号</dt><dd>{device.serial || "当前接口未提供"}</dd></div><div><dt>协议探测</dt><dd>{device.detail || "—"}</dd></div></dl></details></>}
             {diagnostics.length > 0 && <details className="technical-details scan-details"><summary>扫描诊断（{diagnostics.length}）</summary><div className="diagnostic-messages">{diagnostics.map((message, i) => <p key={i}>{message}</p>)}</div></details>}
           </section>
           <section className="panel task-panel" aria-labelledby="task-heading">
