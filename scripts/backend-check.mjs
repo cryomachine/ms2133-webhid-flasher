@@ -24,9 +24,10 @@ function memoryDatabase(records = new Map(), fail = false) {
 function setup(savePicker, shared = {}) {
   const writes = [], clicks = [], attached = new Set(), events = new Map(), timers = new Map(), local = shared.local ?? new Map(), idb = shared.idb ?? memoryDatabase();
   const usbCalls = [];
+  let requestDeviceOptions;
   const unexpectedUsb = method => { usbCalls.push(method); throw new Error(`Unexpected HID transaction: ${method}`); };
   const fakeDevice = {
-    vendorId: 0x345f, productId: 0x2133, productName: "Synthetic test device", opened: false, collections: [],
+    vendorId: shared.vendorId ?? 0x345f, productId: shared.productId ?? 0x2133, productName: "Synthetic test device", opened: false, collections: [],
     open: async () => unexpectedUsb("open"), close: async () => unexpectedUsb("close"),
     sendFeatureReport: async () => unexpectedUsb("sendFeatureReport"), receiveFeatureReport: async () => unexpectedUsb("receiveFeatureReport"),
   };
@@ -36,7 +37,7 @@ function setup(savePicker, shared = {}) {
     window: { isSecureContext: true, indexedDB: idb, addEventListener: (name, handler) => events.set(name, handler), removeEventListener: name => events.delete(name), setTimeout: (handler) => { const id = timers.size + 1; timers.set(id, handler); return id; }, clearTimeout: id => timers.delete(id), ...(savePicker ? { showSaveFilePicker: async () => ({ createWritable: async () => ({ write: async bytes => writes.push(bytes.length), close: async () => writes.push("closed") }) }) } : {}) },
     indexedDB: idb,
     localStorage: { getItem: key => local.get(key) ?? null, setItem: (key, value) => local.set(key, value) },
-    navigator: { userAgent: "test", hid: { getDevices: async () => { usbCalls.push("getDevices"); return [fakeDevice]; }, requestDevice: async () => { usbCalls.push("requestDevice"); return [fakeDevice]; } } },
+    navigator: { userAgent: "test", hid: { getDevices: async () => { usbCalls.push("getDevices"); return [fakeDevice]; }, requestDevice: async options => { usbCalls.push("requestDevice"); requestDeviceOptions = options; return [fakeDevice]; } } },
     document: { body: { appendChild: input => attached.add(input) }, createElement: type => type === "input" ? { style: {}, remove() { attached.delete(this); }, files: shared.cancelPicker ? [] : [{ name: "fixture.bin", arrayBuffer: async () => fixture.buffer }], addEventListener() {}, click() { assert.ok(attached.has(this), "file input must be attached before click"); assert.equal(this.accept, undefined, "native picker must not have UTI filter"); if (!shared.cancelPicker) void this.onchange(); } } : { click() { clicks.push(this.download); } } },
     URL: { createObjectURL: () => "blob:test", revokeObjectURL() {} },
     Blob, Uint8Array, Date, Error, Promise, Map, WeakMap, TextEncoder, btoa,
@@ -49,7 +50,7 @@ function setup(savePicker, shared = {}) {
     assert.fail(`Unexpected backend dependency: ${name}`);
   };
   vm.runInNewContext(backendCode, sandbox);
-  return { api: exports, writes, clicks, usbCalls, local, idb, attached, events, runTimers() { for (const [id, handler] of [...timers]) { timers.delete(id); handler(); } } };
+  return { api: exports, writes, clicks, usbCalls, local, idb, attached, events, get requestDeviceOptions() { return requestDeviceOptions; }, runTimers() { for (const [id, handler] of [...timers]) { timers.delete(id); handler(); } } };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 async function prepare(state, flash, command = "start_flash") {
@@ -89,6 +90,15 @@ async function assertBackupLoadIsLocal(state) {
 const emptySaved = setup(false);
 await assert.rejects(emptySaved.api.callBackend("load_saved_backup"), /尚未保存完整.*备份/);
 await assertBackupLoadIsLocal(emptySaved); savedBackupScenarios++;
+
+const windowsPid = setup(false, { productId: 0x0000 });
+await windowsPid.api.requestWebDevice();
+const requestedFilter = windowsPid.requestDeviceOptions.filters;
+assert.equal(requestedFilter.length, 1, "WebHID authorization must use one vendor filter");
+assert.equal(requestedFilter[0].vendorId, 0x345f, "WebHID authorization must allow Windows PID variants");
+assert.equal("productId" in requestedFilter[0], false, "WebHID authorization must not require a fixed PID");
+const windowsScan = await windowsPid.api.callBackend("scan_devices");
+assert.equal(windowsScan.devices[0].productId, 0x0000, "Windows PID variant must remain visible after authorization");
 
 const missingBackup = savedBackupState(undefined);
 await assert.rejects(missingBackup.api.callBackend("load_saved_backup"), /尚未保存完整.*备份/);

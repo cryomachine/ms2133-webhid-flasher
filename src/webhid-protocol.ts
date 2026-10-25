@@ -5,6 +5,8 @@ import type { DeviceInfo } from "./types";
 // Recovered from BFC9000 e980/e4a0, c1c0, dd50, d9a0 and e130.
 // WebHID sends report ID separately; receiveFeatureReport may retain it.
 const REPORT_ID = 1;
+const MS2133_VENDOR_ID = 0x345f;
+const ROM_PRODUCT_ID = 0x0001;
 const IO_TIMEOUT_MS = 3000;
 type ReportMode = "extended" | "short";
 interface LinkState { blocked: boolean; }
@@ -124,11 +126,11 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
   probes.set(device, { mode: null, readCapable: false });
   legacyEnvelopes.delete(device);
   const base: Partial<DeviceInfo> = { canReadFlash: false, canWriteFlash: false };
-  if (device.vendorId !== 0x345f || ![0x2133, 0x0001].includes(device.productId))
-    return { ...base, status: "error", detail: "所选接口不在MS2133/已知MS213xS-ROM设备列表，未发送设备命令。" };
+  if (device.vendorId !== MS2133_VENDOR_ID)
+    return { ...base, status: "error", detail: "所选接口的厂商ID不是MS2133，未发送设备命令。" };
   const sizes = featureSizes(device.collections);
   const size = sizes.get(REPORT_ID) ?? 0;
-  if (device.productId === 0x0001) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
+  if (device.productId === ROM_PRODUCT_ID) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
   if (size < 8) return { ...base, status: "error", detail: "接口未声明报告ID 1的8字节命令区，未发送设备命令。" };
   if (stockShape(sizes)) {
     try {

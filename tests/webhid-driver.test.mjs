@@ -61,6 +61,25 @@ test('module registers real driver and normalize respects DataView offsets', () 
   assert.equal(normalizeFeatureReply(new DataView(bytes.buffer, 1, 9), 0x52)[4], 1);
 });
 
+test('Windows PID variants are accepted only after the same descriptor and protocol probe', async () => {
+  const device = new MockDevice();
+  device.productId = 0x0000;
+  const info = await webHidDriver.probe(device);
+  assert.equal(info.status, 'reachable');
+  assert.equal(info.canReadFlash, true);
+  assert.deepEqual(device.calls.map(call => call.data.slice(0, 2)), [[0x52, 0]]);
+});
+
+test('a different vendor is rejected without opening or sending commands', async () => {
+  const device = new MockDevice();
+  device.vendorId = 0x1234;
+  const info = await webHidDriver.probe(device);
+  assert.equal(info.status, 'error');
+  assert.equal(info.canReadFlash, false);
+  assert.equal(device.calls.length, 0);
+  assert.equal(device.opened, false);
+});
+
 test('read-only probe sends no stop, factory, erase, or program commands', async () => {
   const device = new MockDevice(); device.busy = true;
   const info = await webHidDriver.probe(device);

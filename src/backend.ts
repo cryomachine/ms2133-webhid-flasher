@@ -23,7 +23,7 @@ export interface BrowserHidDevice {
 }
 interface BrowserHid {
   getDevices(): Promise<BrowserHidDevice[]>;
-  requestDevice(options: { filters: { vendorId: number; productId: number }[] }): Promise<BrowserHidDevice[]>;
+  requestDevice(options: { filters: { vendorId: number; productId?: number }[] }): Promise<BrowserHidDevice[]>;
 }
 export interface ProgressUpdate { phase: string; progress: number; message: string; cancellable: boolean; destructiveStarted?: boolean; readBytes?: number; readTotalBytes?: number; readBytesPerSecond?: number; }
 export interface ProtocolContext {
@@ -54,6 +54,9 @@ let cancelled = false;
 let pendingBackup: { data: Uint8Array; name: string; resolve(): void; reject(error: Error): void } | null = null;
 let lastScan: ScanResult = { devices: [] };
 const idle: OperationState = { kind: "idle", status: "idle", phase: "", progress: 0, message: "等待操作", cancellable: false, logs: [] };
+const MS2133_VENDOR_ID = 0x345f;
+const MS2133_PRODUCT_ID = 0x2133;
+const ROM_PRODUCT_ID = 0x0001;
 
 function browserHid(): BrowserHid {
   if (!window.isSecureContext) throw new Error("WebHID需要安全上下文。请使用HTTPS或localhost打开网页。");
@@ -79,18 +82,22 @@ function reportLength(collections: HidCollection[]): number | null {
   return maximum || null;
 }
 export async function requestWebDevice(): Promise<void> {
-  await browserHid().requestDevice({ filters: [{ vendorId: 0x345f, productId: 0x2133 }, { vendorId: 0x345f, productId: 0x0001 }] });
+  // Windows can expose the same HID interface with a firmware-dependent PID
+  // (and some composite-device bridges report PID 0000). Filter only by the
+  // assigned vendor so the chooser can show those interfaces. The protocol
+  // probe below still gates all reads and writes by the descriptor and reply.
+  await browserHid().requestDevice({ filters: [{ vendorId: MS2133_VENDOR_ID }] });
 }
 async function scan(): Promise<ScanResult> {
   if (current?.status === "running") throw new Error("操作进行中，请等待当前阶段完成后再扫描设备。");
-  const authorized = (await browserHid().getDevices()).filter(d => d.vendorId === 0x345f && [0x2133, 0x0001].includes(d.productId));
+  const authorized = (await browserHid().getDevices()).filter(d => d.vendorId === MS2133_VENDOR_ID);
   const found: DeviceInfo[] = [];
   for (const device of authorized) {
     const id = idFor(device);
     const collection = device.collections.find(c => c.usagePage >= 0xff00) ?? device.collections[0];
     let item: DeviceInfo = {
       id, path: `WebHID授权接口 ${id}`, vendorId: device.vendorId, productId: device.productId,
-      product: device.productName || (device.productId === 0x0001 ? "MS213xS ROM恢复接口" : "MS2133"), usagePage: collection?.usagePage, usage: collection?.usage,
+      product: device.productName || (device.productId === ROM_PRODUCT_ID ? "MS213xS ROM恢复接口" : device.productId === MS2133_PRODUCT_ID ? "MS2133" : `MS2133 HID接口 (PID ${device.productId.toString(16).padStart(4, "0").toUpperCase()})`), usagePage: collection?.usagePage, usage: collection?.usage,
       featureReportLength: reportLength(device.collections), status: "enumerated",
       canReadFlash: false, canWriteFlash: false,
       detail: driver ? "尚未完成通信探测" : "已取得浏览器授权；协议模块尚未加载，写入未开放。",
@@ -101,7 +108,7 @@ async function scan(): Promise<ScanResult> {
     }
     found.push(item);
   }
-  lastScan = { devices: found, diagnostics: found.length ? [] : ["当前列表仅包含已授权的345F:2133及345F:0001 ROM HID接口。首次使用请点击“连接采集卡”授权设备。ROM入口须实际枚举，网页不会强制使设备进入ROM。"] };
+  lastScan = { devices: found, diagnostics: found.length ? [] : ["暂未发现已授权的345F厂商HID接口；Windows可能为同一设备暴露不同PID，网页会继续通过报告描述符和只读协议探测确认。首次使用请点击“连接采集卡”授权设备。ROM入口须实际枚举，网页不会强制使设备进入ROM。"] };
   return lastScan;
 }
 function chooseFile(restore = false): Promise<string | null> {
