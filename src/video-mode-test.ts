@@ -1,3 +1,5 @@
+import { matchesRequestedDimensions, normalizeReportedDimensions } from "./video-dimensions";
+
 export type VideoModeDescriptor = {
   width: number;
   height: number;
@@ -131,8 +133,8 @@ async function waitForModeSettled(
   // track settings and the decoded video dimensions before sampling frames.
   while (performance.now() < deadline) {
     const settings = track.getSettings();
-    const trackMatches = settings.width === mode.width && settings.height === mode.height;
-    const videoMatches = video.videoWidth === mode.width && video.videoHeight === mode.height;
+    const trackMatches = matchesRequestedDimensions(settings.width, settings.height, mode.width);
+    const videoMatches = matchesRequestedDimensions(video.videoWidth, video.videoHeight, mode.width);
     if (trackMatches && videoMatches) {
       // Let the decoder present at least one frame at the new dimensions
       // before the sampling window starts; UVC mode changes can otherwise
@@ -182,13 +184,19 @@ export async function runSixModeCaptureTest(
       const settings = track.getSettings();
       const sample = await sampleFrames(video, durationMs);
       if (sample.frameCount === 0) throw new Error("测试窗口内未收到视频帧");
-      results.push({ ...mode, status: "passed", actualWidth: settings.width ?? (video.videoWidth || null),
-        actualHeight: settings.height ?? (video.videoHeight || null), actualFrameRate: settings.frameRate ?? null,
+      const observed = normalizeReportedDimensions(
+        settings.width ?? (video.videoWidth || undefined),
+        settings.height ?? (video.videoHeight || undefined),
+        mode.width,
+      );
+      results.push({ ...mode, status: "passed", actualWidth: observed.width ?? null,
+        actualHeight: observed.height ?? null, actualFrameRate: settings.frameRate ?? null,
         observedFrameRate: sample.frameCount * 1000 / sample.elapsedMs, frameCount: sample.frameCount,
         elapsedMs: performance.now() - started });
     } catch (error) {
       const settings = track.getSettings();
-      results.push({ ...mode, status: "failed", actualWidth: settings.width ?? null, actualHeight: settings.height ?? null,
+      const observed = normalizeReportedDimensions(settings.width, settings.height, mode.width);
+      results.push({ ...mode, status: "failed", actualWidth: observed.width ?? null, actualHeight: observed.height ?? null,
         actualFrameRate: settings.frameRate ?? null, observedFrameRate: null, frameCount: 0,
         elapsedMs: performance.now() - started, error: errorText(error) });
       if (errorText(error).startsWith("UVC 模式约束调用超时")) {
