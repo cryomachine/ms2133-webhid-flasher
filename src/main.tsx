@@ -6,6 +6,7 @@ import type { DeviceInfo, FirmwareInfo, LogEntry, OperationState, ScanResult } f
 import type { RecoverySummary } from "./storage";
 import { runSixModeCaptureTest } from "./video-mode-test";
 import type { SixCaptureTestResult, VideoModeDescriptor } from "./video-mode-test";
+import { matchesRequestedDimensions, normalizeReportedDimensions } from "./video-dimensions";
 import { LatencyTest } from "./latency-test";
 import "./style.css";
 
@@ -47,7 +48,7 @@ function waitForPreviewFrame(video: HTMLVideoElement, pixels: number, timeoutMs 
     };
     const check = () => {
       if (settled || framePending) return;
-      if (video.videoWidth !== pixels || video.videoHeight !== pixels) {
+      if (!matchesRequestedDimensions(video.videoWidth, video.videoHeight, pixels)) {
         if (performance.now() >= deadline) finish(new Error(`视频解码尺寸未稳定为 ${pixels} × ${pixels}`));
         return;
       }
@@ -121,6 +122,8 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
   const stableCropRef = useRef<number | null>(null);
   const recoveredCropRef = useRef<number | null | undefined>(undefined);
   const recoveryPendingRef = useRef(false);
+  const requestedCropRef = useRef(requestedCrop);
+  requestedCropRef.current = requestedCrop;
 
   const stop = useCallback(() => {
     stream?.getTracks().forEach(track => track.stop());
@@ -154,7 +157,8 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
       const devices = await enumerateVideoDevices();
       const track = next.getVideoTracks()[0];
       const settings = track?.getSettings();
-      setStats({ width: settings?.width ?? 0, height: settings?.height ?? 0, frameRate: settings?.frameRate ?? null, label: track?.label || devices.find(item => item.deviceId === selectedDeviceId)?.label || "视频输入", state: "采集中" });
+      const normalized = normalizeReportedDimensions(settings?.width, settings?.height, requestedCropRef.current);
+      setStats({ width: normalized.width ?? 0, height: normalized.height ?? 0, frameRate: settings?.frameRate ?? null, label: track?.label || devices.find(item => item.deviceId === selectedDeviceId)?.label || "视频输入", state: "采集中" });
       return next;
     } catch (error) {
       setPreviewError(errorText(error));
@@ -185,8 +189,11 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
     if (!video || !stream) return;
     video.srcObject = stream;
     const syncVideoDimensions = () => {
-      const width = video.videoWidth;
-      const height = video.videoHeight;
+      const observedWidth = video.videoWidth;
+      const observedHeight = video.videoHeight;
+      const normalized = normalizeReportedDimensions(observedWidth, observedHeight, requestedCropRef.current);
+      const width = normalized.width;
+      const height = normalized.height;
       if (!width || !height) return;
       setStats(previous => previous ? { ...previous, width, height } : previous);
     };
@@ -210,10 +217,11 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
     const id = window.setInterval(() => {
       const track = stream.getVideoTracks()[0];
       const settings = track?.getSettings();
-      if (track) setStats(previous => ({ width: settings?.width ?? previous?.width ?? 0, height: settings?.height ?? previous?.height ?? 0, frameRate: settings?.frameRate ?? previous?.frameRate ?? null, label: track.label || previous?.label || "视频输入", state: track.readyState === "live" ? "采集中" : "已停止" }));
+      const normalized = normalizeReportedDimensions(settings?.width, settings?.height, requestedCrop);
+      if (track) setStats(previous => ({ width: normalized.width ?? previous?.width ?? 0, height: normalized.height ?? previous?.height ?? 0, frameRate: settings?.frameRate ?? previous?.frameRate ?? null, label: track.label || previous?.label || "视频输入", state: track.readyState === "live" ? "采集中" : "已停止" }));
     }, 1000);
     return () => window.clearInterval(id);
-  }, [stream]);
+  }, [requestedCrop, stream]);
 
   useEffect(() => {
     if (!requestedCrop) {
@@ -267,13 +275,14 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
         }, 4000);
         if (cancelled) return;
         const settings = track.getSettings();
+        const normalizedSettings = normalizeReportedDimensions(settings.width, settings.height, requestedCrop);
         setStats(previous => previous ? {
           ...previous,
-          width: settings.width ?? previous.width,
-          height: settings.height ?? previous.height,
+          width: normalizedSettings.width ?? previous.width,
+          height: normalizedSettings.height ?? previous.height,
           frameRate: settings.frameRate ?? previous.frameRate,
         } : previous);
-        if (settings.width !== requestedCrop || settings.height !== requestedCrop) {
+        if (!matchesRequestedDimensions(settings.width, settings.height, requestedCrop)) {
           throw new Error(`设备返回 ${settings.width ?? "未知"} × ${settings.height ?? "未知"}`);
         }
         const video = videoRef.current;

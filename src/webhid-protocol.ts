@@ -130,14 +130,18 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
     return { ...base, status: "error", detail: "所选接口的厂商ID不是MS2133，未发送设备命令。" };
   const sizes = featureSizes(device.collections);
   const size = sizes.get(REPORT_ID) ?? 0;
-  if (device.productId === ROM_PRODUCT_ID) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
   if (size < 8) return { ...base, status: "error", detail: "接口未声明报告ID 1的8字节命令区，未发送设备命令。" };
-  if (stockShape(sizes)) {
+  // U3 Upgrade (PID 0001) exposes the same report-ID 1 register path as
+  // stock MS2133 on the recovered board. Probe only B5/C5 first; the
+  // existing legacy Flash session still requires its own JEDEC checks.
+  if (device.productId === ROM_PRODUCT_ID || stockShape(sizes)) {
     try {
       const result = await opened(device, async () => {
         await legacyReadXdata(device, 0xf01f);
         await legacyReadSfr(device, 0xa0);
-        return { ...base, featureReportLength: 9, status: "reachable" as const, canReadFlash: true, canWriteFlash: true, detail: "已确认原厂三报告接口（ID1=8、ID2=63、ID3=4095字节）及B5/C5读取；读写使用原厂SPI事务，写入前仍需完整备份与容器验证。" };
+        return { ...base, featureReportLength: 9, status: "reachable" as const, canReadFlash: true, canWriteFlash: true, detail: device.productId === ROM_PRODUCT_ID
+          ? "U3 Upgrade 已通过原厂B5/C5只读探测；先双读备份并确认JEDEC，再决定是否进入SPI事务。"
+          : "已确认原厂三报告接口（ID1=8、ID2=63、ID3=4095字节）及B5/C5读取；读写使用原厂SPI事务，写入前仍需完整备份与容器验证。" };
       });
       probes.set(device, {mode: "legacy", readCapable: true});
       return result;

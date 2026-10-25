@@ -53,9 +53,9 @@ export class StockDevice {
   restored(){assert.equal(this.xdata.get(0xf01f),0x20);for(const [a,v]of [[0xa0,0x94],[0xb0,0x5c],[0xc7,0x22],[0xca,0xf3]])assert.equal(this.sfr.get(a),v);}
 }
 export function context(d){const updates=[],backups=[],logs=[];return {operationMode:'flash',updates,backups,logs,update(v){updates.push(v);},log(message){logs.push(message);},isCancelled(){return false;},async saveBackup(b){assert.equal(d.erased.length,0);backups.push(b.slice());}};}
-test('precise stock descriptor probes B5/C5 only, and ROM is enumerated without guesses',async()=>{
+test('precise stock descriptor probes B5/C5 only, and U3 is admitted after the same probe',async()=>{
   const d=new StockDevice();const p=await webHidDriver.probe(d);assert.equal(p.canReadFlash,true);assert.equal(p.canWriteFlash,true);assert.equal(p.featureReportLength,9);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
-  const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.canWriteFlash,false);assert.equal(rom.calls,0);assert.match(r.detail,/ROM/);
+  const u3=new StockDevice();u3.productId=1;const r=await webHidDriver.probe(u3);assert.equal(r.canReadFlash,true);assert.equal(r.canWriteFlash,true);assert.equal(u3.calls,2);assert.match(r.detail,/U3 Upgrade/);
 });
 test('stock full backup uses correct F7 raw chunks twice and restores every saved SPI register',async()=>{
   const d=new StockDevice();const before=d.memory.slice();await webHidDriver.probe(d);const b=await webHidDriver.backup(d,context(d));assert.deepEqual(b,before);assert.equal(d.pages,2048);d.restored();assert.equal(d.erased.length,0);assert.equal(d.programmed.length,0);
