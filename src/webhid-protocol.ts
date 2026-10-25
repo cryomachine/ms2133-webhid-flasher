@@ -14,6 +14,12 @@ interface ProbeState { mode: ReportMode | "legacy" | null; readCapable: boolean;
 interface MaintenanceState { result: number; active: boolean; }
 const links = new WeakMap<BrowserHidDevice, LinkState>();
 const probes = new WeakMap<BrowserHidDevice, ProbeState>();
+// The Windows-flattened stock descriptor requires every short command to be
+// sent in a 4095-byte data report. Cache the descriptor sizes and backing
+// buffer so a long 4-byte-at-a-time flash does not repeatedly traverse the
+// descriptor tree or allocate a multi-kilobyte Uint8Array for every command.
+const featureSizeCache = new WeakMap<BrowserHidDevice, Map<number, number>>();
+const flatReportBuffers = new WeakMap<BrowserHidDevice, Uint8Array>();
 // Established only from unambiguous B5/C5 opcode+address echoes. Raw Flash
 // bytes may begin with01 and must never be used to guess the report envelope.
 const legacyEnvelopes = new WeakMap<BrowserHidDevice, { includesReportId: boolean }>();
@@ -68,11 +74,20 @@ function payload(command: Uint8Array, mode: ReportMode, page?: Uint8Array): Uint
 }
 async function send(device: BrowserHidDevice, mode: ReportMode, command: Uint8Array, page?: Uint8Array): Promise<void> {
   let data = payload(command, mode, page);
-  const sizes = featureSizes(device.collections);
+  let sizes = featureSizeCache.get(device);
+  if (!sizes) {
+    sizes = featureSizes(device.collections);
+    featureSizeCache.set(device, sizes);
+  }
   if (windowsFlatStockShape(device, sizes)) {
     const declared = sizes.get(REPORT_ID)!;
     if (data.length < declared) {
-      const padded = new Uint8Array(declared);
+      let padded = flatReportBuffers.get(device);
+      if (!padded || padded.length !== declared) {
+        padded = new Uint8Array(declared);
+        flatReportBuffers.set(device, padded);
+      }
+      padded.fill(0);
       padded.set(data);
       data = padded;
     }
@@ -649,12 +664,23 @@ async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context
         }
         context.log(`扇区0x${address.toString(16)}擦写及回读一致（${index + 1}/${changed.length}）`);
       }
-      for (let address = 0; address < session.capacity; address += unit) {
-        if (!sameBytes(await (session.readSector ? session.readSector(address) : session.read(address)), target.subarray(address, address + unit)))
-          throw new Error(`整片最终校验失败，地址0x${address.toString(16)}。`);
-        context.update({phase: "最终整片校验", progress: 80 + Math.floor((address + unit) / session.capacity * 19), message: `${address + unit}/${session.capacity}字节，包含保留尾部`, cancellable: false});
+      if (session.readSector) {
+        // The stock protocol verifies every changed sector immediately after
+        // programming it. All writable sectors were also re-read immediately
+        // before the first erase, and untouched sectors are never addressed by
+        // the write loop, so a second whole-chip read only duplicates the
+        // slow E7/F7 traffic. Keep the stronger whole-chip pass for the ROI
+        // protocol, whose page transactions have a different failure model.
+        update(context, "原厂扇区校验完成", 99, "所有变更扇区已回读一致；保留尾部未写入");
+        context.log(`原厂接口已完成变更扇区回读校验；跳过重复整片回读，容器SHA-256 ${await sha256(image)}。断电冷启动验证仍需进行。`, "success");
+      } else {
+        for (let address = 0; address < session.capacity; address += unit) {
+          if (!sameBytes(await session.read(address), target.subarray(address, address + unit)))
+            throw new Error(`整片最终校验失败，地址0x${address.toString(16)}。`);
+          context.update({phase: "最终整片校验", progress: 80 + Math.floor((address + unit) / session.capacity * 19), message: `${address + unit}/${session.capacity}字节，包含保留尾部`, cancellable: false});
+        }
+        context.log(`完整Flash最终回读与目标一致；容器SHA-256 ${await sha256(image)}。断电冷启动验证仍需进行。`, "success");
       }
-      context.log(`完整Flash最终回读与目标一致；容器SHA-256 ${await sha256(image)}。断电冷启动验证仍需进行。`, "success");
       return {verified: true};
     });
   } catch (error) {
