@@ -1,7 +1,9 @@
 # Third-Party Notices
 
 This file covers third-party code used by the browser source project. The
-project does not distribute firmware images or local launcher binaries.
+project bundles the owner-selected factory image for the factory restore task.
+That image is vendor firmware and is not covered by the source code's MIT
+license. Other device backups and local launcher binaries are not distributed.
 
 ## MS213x HID protocol
 

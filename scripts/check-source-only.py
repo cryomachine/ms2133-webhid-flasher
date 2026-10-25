@@ -1,6 +1,7 @@
-"""Reject firmware and binary artifacts from public source/package inputs."""
+"""Reject binary artifacts except the explicitly bundled factory image."""
 from pathlib import Path
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -12,6 +13,10 @@ args = parser.parse_args()
 excluded = {"node_modules", ".git", "release", "dist", "build", "__pycache__"}
 blocked = {".bin", ".rom", ".hex", ".fw", ".img", ".dump", ".elf", ".exe",
            ".dll", ".so", ".dylib", ".zip", ".gz", ".tar", ".7z", ".uf2", ".hex32"}
+# The factory restore task deliberately ships this owner-selected image.
+# Pin its complete content; a renamed backup or replacement image must fail.
+factory_paths = {Path("public/firmware/factory.bin"), Path("dist/firmware/factory.bin")}
+factory_sha256 = "29139f8cb6d9671a605d4e2789a7dbfb8d311534b5d11219ff9d32c2715077f8"
 files = set()
 # Do not inspect a parent workspace's Git index.
 if (root / ".git").exists():
@@ -35,6 +40,11 @@ for relative in sorted(files):
     if file.is_symlink():
         errors.append(f"{relative}: symlink is not a source file")
         continue
+    if relative in factory_paths and file.is_file():
+        data = file.read_bytes()
+        if len(data) != 524288 or hashlib.sha256(data).hexdigest() != factory_sha256:
+            errors.append(f"{relative}: bundled factory size/SHA-256 mismatch")
+        continue
     if relative.suffix.lower() in blocked:
         errors.append(f"{relative}: binary/firmware extension")
         continue
@@ -52,4 +62,4 @@ for relative in sorted(files):
 if errors:
     print("Source-only check FAILED:\n" + "\n".join(errors), file=sys.stderr)
     sys.exit(1)
-print(f"Source-only check passed: {len(files)} text files; no firmware or binary artifacts.")
+print(f"Source check passed: {len(files)} files; only the pinned factory image is allowed as binary.")

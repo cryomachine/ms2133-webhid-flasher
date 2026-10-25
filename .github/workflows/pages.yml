@@ -31,7 +31,7 @@ jobs:
           python-version: '3.x'
       - name: Install JavaScript dependencies
         run: npm ci
-      - name: Check source contains no firmware or backups
+      - name: Check source and pinned factory image
         run: npm run check:source
       - name: Run offline tests
         run: npm test

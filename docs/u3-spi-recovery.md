@@ -27,8 +27,8 @@ npm run build
 npm run dev
 ```
 
-Open the printed localhost URL in desktop Chrome or Edge, connect the device, make and save a complete backup, then select the firmware task. The page never ships a firmware image; choose an image from the local machine and verify its hash before starting.
+Open the printed localhost URL in desktop Chrome or Edge, connect the device, make and save a complete backup, then select the firmware task. For the normal rescue flow, choose a matching local image and save the device backup before starting. The separate factory restore task uses the pinned bundled image without a pre-read or backup, reconstructs full writable sectors, and verifies them after programming.
 
 ## Publication boundary
 
-Firmware, ROM dumps, full Flash backups, recovery packages, and generated binaries are excluded by `.gitignore` and the source-only CI check. This project documents and implements the WebHID factory SPI transaction; it is not a physical SPI programmer and does not contain any vendor image.
+The sole bundled binary is `public/firmware/factory.bin`, 524288 bytes, SHA-256 `29139f8cb6d9671a605d4e2789a7dbfb8d311534b5d11219ff9d32c2715077f8`. CI verifies that exact image in source and deployment assets; all other firmware, ROM dumps, backups, recovery packages, and generated binaries remain excluded. This project documents and implements the WebHID factory SPI transaction; it is not a physical SPI programmer and bundles only the pinned factory image for the restore task.

@@ -282,7 +282,7 @@ async function readPage(device: BrowserHidDevice, address: number): Promise<Uint
 }
 const CONTAINER_SIZE = 0x18034;
 const WRITE_END = 0x19000;
-// The public distribution ships no firmware or device-specific fingerprints.
+// No device-specific fingerprints are configured for the legacy builtin gate.
 // Keep the built-in recovery gate closed even if a caller requests that mode.
 const KNOWN_512K_TAIL: string | null = null;
 const KNOWN_BOOT_IMAGES = new Set<string>();

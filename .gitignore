@@ -15,7 +15,7 @@ coverage/
 *.tar.gz
 *.tgz
 
-# Firmware, ROMs and device images: never commit these files.
+# Firmware, ROMs and device images are excluded except the pinned factory image.
 *.bin
 *.rom
 *.hex
@@ -36,6 +36,7 @@ coverage/
 *.[eE][eE][pP][rR][oO][mM]
 *.[iI][hH][eE][xX]
 *.[uU][fF]2
+!/public/firmware/factory.bin
 
 # User backups, recovery packages and local operation data
 backups/
