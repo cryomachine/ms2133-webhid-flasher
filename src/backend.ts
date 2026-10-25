@@ -29,7 +29,7 @@ export interface ProgressUpdate { phase: string; progress: number; message: stri
 export interface ProtocolContext {
   intent?: "backup" | "flash" | "restore";
   operationMode?: "flash" | "restore-builtin" | "restore-file";
-  directStockWrite?: boolean;
+  directImageWrite?: boolean;
   referenceImage?: Uint8Array;
   update(value: ProgressUpdate): void;
   log(message: string, level?: LogEntry["level"]): void;
@@ -237,7 +237,7 @@ function context(referenceImage?: Uint8Array): ProtocolContext {
   return {
     intent: current?.kind === "restore" ? "restore" : current?.kind === "flash" ? "flash" : "backup",
     operationMode: current?.kind === "restore" ? "restore-file" : "flash",
-    directStockWrite: current?.directStockWrite === true,
+    directImageWrite: current?.directImageWrite === true,
     referenceImage,
     update: value => {
       if (current) {
@@ -305,9 +305,9 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
   const id = `web-${Date.now()}`;
   recovery = { id, createdAt: new Date().toISOString(), device: scanned!, firmware, image: image ? new Uint8Array(image) : undefined };
   await putRecovery(recovery);
-  const directStockWrite = kind !== "backup" && scanned?.firmwareType === "stock";
-  const referenceImage = directStockWrite && kind === "flash" ? await loadFactoryReference() : undefined;
-  const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133", directStockWrite };
+  const directImageWrite = kind !== "backup" && (kind === "restore" || scanned?.firmwareType === "stock");
+  const referenceImage = directImageWrite && kind === "flash" ? await loadFactoryReference() : undefined;
+  const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133", directImageWrite };
   saveOperation(next);
   current = next;
   const ctx = context(referenceImage);
@@ -332,7 +332,7 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
           if (current) current.backupPath = name;
         }
       }
-      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : directStockWrite ? "写入完成" : "写入与回读校验完成", cancellable: false };
+      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : directImageWrite ? "写入完成" : "写入与回读校验完成", cancellable: false };
       if (current) saveOperation(current);
     } catch (e) {
       if (current) {

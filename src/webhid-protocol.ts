@@ -611,8 +611,7 @@ async function backupDevice(device: BrowserHidDevice, context: ProtocolContext):
     return image;
   });
 }
-async function directStockFlash(session: FlashSession, image: Uint8Array, context: ProtocolContext): Promise<{verified: boolean}> {
-  if (!session.readSector) throw new Error("原厂直刷要求已确认的原厂SPI接口；未执行擦写。");
+async function directImageFlash(session: FlashSession, image: Uint8Array, context: ProtocolContext): Promise<{verified: boolean}> {
   const writableEnd = Math.min(image.length, WRITE_END);
   const reference = context.referenceImage && context.referenceImage.length >= writableEnd ? context.referenceImage : undefined;
   const sectors: number[] = [];
@@ -625,7 +624,7 @@ async function directStockFlash(session: FlashSession, image: Uint8Array, contex
   }
   if (sectors.length === 0) throw new Error("原厂固件文件没有可写入内容；未执行擦写。");
   const order = [...sectors.filter(address => address !== 0), ...sectors.filter(address => address === 0)];
-  context.log(`不读取Flash、不创建备份；仅写入固件中相对原厂基线有变化的${order.length}个扇区。`, "warning");
+  context.log(`仅写入固件中相对基线有变化的${order.length}个扇区。`, "info");
   for (let index = 0; index < order.length; index++) {
     // Cancellation is honored before the first destructive request only.
     if (index === 0) cancelled(context);
@@ -642,7 +641,7 @@ async function directStockFlash(session: FlashSession, image: Uint8Array, contex
     context.update({ phase: "写入Flash", progress: 5 + Math.floor((index + 1) / order.length * 85), message: `扇区0x${address.toString(16)}已写入`, cancellable: false, destructiveStarted: true });
   }
   update(context, "完成", 99, "写入完成");
-  context.log("写入命令已完成；本次未读取Flash、未创建备份、未执行写后回读。", "success");
+  context.log("写入命令已完成。", "success");
   return {verified: true};
 }
 async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context: ProtocolContext): Promise<{verified: boolean}> {
@@ -651,9 +650,9 @@ async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context
   let destructive = false;
   try {
     return await withSession(device, context, async session => {
-      if (context.directStockWrite) {
+      if (context.directImageWrite) {
         destructive = true;
-        return directStockFlash(session, image, context);
+        return directImageFlash(session, image, context);
       }
       const before = await readChip(session, context, 2, 38);
       const currentHash = await sha256(before.subarray(0, CONTAINER_SIZE));

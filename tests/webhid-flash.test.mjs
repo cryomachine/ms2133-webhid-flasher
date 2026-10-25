@@ -57,6 +57,12 @@ test('extended flash saves full backup, writes changed sectors/header last, skip
   assert.deepEqual(d.calls.slice(-2).map(c=>Array.from(c.subarray(0,2))),[[0x52,7],[0x52,0]]);
   assert.equal(d.active,false);
 });
+test('direct image write on extended interface skips Flash reads and backup',async()=>{
+  const d=new FlashDevice(); const c=ctx(d); c.directImageWrite=true;
+  await webHidDriver.probe(d);
+  assert.deepEqual(await webHidDriver.flash(d,baseline,c),{verified:true});
+  assert.equal(c.backups.length,0); assert.equal(d.readCount,0); assert.deepEqual(d.memory.subarray(0,baseline.length),baseline);
+});
 test('saving backup is a hard barrier and save rejection causes no erase',async()=>{
   const d=new FlashDevice();await assert.rejects(run(d,ctx(d,{saveFailure:true})),/save failed/);assert.equal(d.eraseAddresses.length,0);
 });

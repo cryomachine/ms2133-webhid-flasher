@@ -54,5 +54,5 @@ export interface OperationState {
   readBytesPerSecond?: number;
   firmwareSha256?: string;
   target?: string;
-  directStockWrite?: boolean;
+  directImageWrite?: boolean;
 }
