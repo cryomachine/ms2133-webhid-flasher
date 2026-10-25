@@ -59,9 +59,24 @@ test('extended flash saves full backup, writes changed sectors/header last, skip
 });
 test('direct image write on extended interface verifies Flash without backup',async()=>{
   const d=new FlashDevice(); const c=ctx(d); c.directImageWrite=true;
+  c.referenceImage=d.memory.slice();
+  await webHidDriver.probe(d);
+  const image=modified();
+  assert.deepEqual(await webHidDriver.flash(d,image,c),{verified:true});
+  assert.equal(c.backups.length,0); assert.ok(d.readCount>0); assert.deepEqual(d.memory.subarray(0,image.length),image);
+});
+test('direct image write refuses a partial container without a full reference',async()=>{
+  const d=new FlashDevice(); const c=ctx(d); c.directImageWrite=true;
+  await webHidDriver.probe(d);
+  await assert.rejects(webHidDriver.flash(d,baseline,c),/完整原厂基线/);
+  assert.equal(d.eraseAddresses.length,0);
+});
+test('read-free restore writes every target sector even when it matches the baseline',async()=>{
+  const d=new FlashDevice(); const c=ctx(d,{mode:'restore-file'}); c.directImageWrite=true; c.referenceImage=d.memory.slice();
   await webHidDriver.probe(d);
   assert.deepEqual(await webHidDriver.flash(d,baseline,c),{verified:true});
-  assert.equal(c.backups.length,0); assert.ok(d.readCount>0); assert.deepEqual(d.memory.subarray(0,baseline.length),baseline);
+  assert.equal(d.eraseAddresses.length,0x19000/0x1000);
+  assert.equal(d.eraseAddresses.at(-1),0);
 });
 test('saving backup is a hard barrier and save rejection causes no erase',async()=>{
   const d=new FlashDevice();await assert.rejects(run(d,ctx(d,{saveFailure:true})),/save failed/);assert.equal(d.eraseAddresses.length,0);

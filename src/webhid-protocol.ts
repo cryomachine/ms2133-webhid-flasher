@@ -613,14 +613,32 @@ async function backupDevice(device: BrowserHidDevice, context: ProtocolContext):
 }
 async function directImageFlash(session: FlashSession, image: Uint8Array, context: ProtocolContext): Promise<{verified: boolean}> {
   const writableEnd = Math.min(image.length, WRITE_END);
-  const reference = context.referenceImage && context.referenceImage.length >= writableEnd ? context.referenceImage : undefined;
+  // A container ends in the middle of the 0x18000 sector.  Erasing that sector
+  // without a complete reference image turns the remainder into FF and can
+  // leave the chip in the ROM/U3 upgrade PID.  Direct mode deliberately does
+  // not read or back up the device, so it must have a full baseline to rebuild
+  // every byte through WRITE_END before the first destructive request.
+  const reference = context.referenceImage && context.referenceImage.length >= WRITE_END ? context.referenceImage : undefined;
+  if (!reference && writableEnd < WRITE_END)
+    throw new Error("直写需要完整原厂基线以保留容器所在扇区的尾部；未执行擦写。请挂载完整factory.bin。");
+  // Restore is intentionally read-free. With no device image to compare, the
+  // factory target must be sent to every writable sector even when it equals
+  // the bundled baseline; otherwise a modified device would be reported as
+  // restored while no Flash command was issued.
+  const forceAllSectors = context.operationMode === "restore-file";
+  const targetByte = (index: number): number => index < image.length ? image[index] : reference![index];
+  const sectorImage = (address: number): Uint8Array => {
+    const target = new Uint8Array(4096);
+    for (let offset = 0; offset < target.length; offset++) target[offset] = targetByte(address + offset);
+    return target;
+  };
   const sectors: number[] = [];
-  for (let address = 0; address < writableEnd; address += 4096) {
-    const end = Math.min(address + 4096, writableEnd);
+  for (let address = 0; address < WRITE_END; address += 4096) {
+    const desired = sectorImage(address);
     const changedFromReference = reference
-      ? image.slice(address, end).some((byte, index) => byte !== reference[address + index])
-      : image.subarray(address, end).some(byte => byte !== 255);
-    if (changedFromReference) sectors.push(address);
+      ? desired.some((byte, index) => byte !== reference[address + index])
+      : desired.some(byte => byte !== 255);
+    if (forceAllSectors || changedFromReference) sectors.push(address);
   }
   if (sectors.length === 0) throw new Error("原厂固件文件没有可写入内容；未执行擦写。");
   const order = [...sectors.filter(address => address !== 0), ...sectors.filter(address => address === 0)];
@@ -629,32 +647,29 @@ async function directImageFlash(session: FlashSession, image: Uint8Array, contex
     // Cancellation is honored before the first destructive request only.
     if (index === 0) cancelled(context);
     const address = order[index];
+    const desired = sectorImage(address);
     context.update({ phase: "擦除Flash", progress: 5 + Math.floor(index / order.length * 75), message: `扇区0x${address.toString(16)}，${index + 1}/${order.length}`, cancellable: false, destructiveStarted: true });
     await session.erase(address);
     for (let offset = 0; offset < 4096; offset += 256) {
-      const page = new Uint8Array(256).fill(255);
-      const start = address + offset;
-      const end = Math.min(start + 256, writableEnd);
-      if (start < end) page.set(image.subarray(start, end));
-      if (!page.every(byte => byte === 255)) await session.program(start, page);
+      const page = desired.slice(offset, offset + 256);
+      if (!page.every(byte => byte === 255)) await session.program(address + offset, page);
     }
     // Direct writes used to report success as soon as the program commands
     // returned.  That is unsafe for the boot sector: a lost or rejected page
     // write can leave the device in the ROM/U3 upgrade PID while the UI still
-    // says "complete".  Verify every byte that belongs to the source image
-    // before allowing the session cleanup and success state.
+    // says "complete". Verify the complete reconstructed sector, including
+    // the factory-baseline tail, before allowing cleanup and success.
     const unit = session.readSector ? 4096 : 256;
-    for (let offset = 0; offset < 4096 && address + offset < writableEnd; offset += unit) {
+    for (let offset = 0; offset < 4096; offset += unit) {
       const start = address + offset;
-      const end = Math.min(start + unit, writableEnd);
       const actual = await (session.readSector ? session.readSector(start) : session.read(start));
-      const expected = image.subarray(start, end);
+      const expected = desired.subarray(offset, offset + unit);
       if (!sameBytes(actual.subarray(0, expected.length), expected))
         throw new Error(`直写扇区回读校验失败，地址0x${start.toString(16)}；请勿继续重试，先断电重连并使用恢复包。`);
     }
     context.update({ phase: "写入Flash", progress: 5 + Math.floor((index + 1) / order.length * 85), message: `扇区0x${address.toString(16)}已写入`, cancellable: false, destructiveStarted: true });
   }
-  update(context, "完成", 99, "写入完成");
+  update(context, "完成", 99, "写入及回读校验完成");
   context.log("写入及逐扇区回读校验已完成；断电重连后再确认设备是否恢复。", "success");
   return {verified: true};
 }

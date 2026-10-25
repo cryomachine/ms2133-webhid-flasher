@@ -214,15 +214,20 @@ async function loadFactoryFirmware(): Promise<FirmwareInfo> {
   }
 }
 async function loadFactoryReference(): Promise<Uint8Array | undefined> {
+  if (typeof fetch !== "function") return undefined;
   const response = await fetch("/firmware/factory.bin", { cache: "no-store" });
   if (!response.ok) return undefined;
   const source = new Uint8Array(await response.arrayBuffer());
+  // Keep the complete factory image as the direct-write baseline.  The
+  // 98,356-byte container ends inside the 0x18000 sector, so a short slice
+  // would make the sector tail become FF after erase.
+  if (source.length < 0x19000) return undefined;
   const image = source.length > 0x18034 ? source.slice(0, 0x18034) : source;
   const path = `factory-reference-${++fileSequence}/factory.bin`;
   sourceSizes.set(path, source.length); files.set(path, image);
   try {
     const info = await inspect(path);
-    return info.valid ? image : undefined;
+    return info.valid ? source : undefined;
   } finally {
     files.delete(path); sourceSizes.delete(path);
   }
@@ -305,8 +310,13 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
   const id = `web-${Date.now()}`;
   recovery = { id, createdAt: new Date().toISOString(), device: scanned!, firmware, image: image ? new Uint8Array(image) : undefined };
   await putRecovery(recovery);
-  const directImageWrite = kind !== "backup" && (kind === "restore" || scanned?.firmwareType === "stock");
-  const referenceImage = directImageWrite && kind === "flash" ? await loadFactoryReference() : undefined;
+  // A plain container can use the read-free factory-baseline path on stock
+  // firmware. A normalized full backup still needs the normal read/backup
+  // path so its saved tail remains the target instead of being replaced by
+  // the bundled factory tail.
+  const directImageWrite = kind === "restore" ||
+    (kind === "flash" && scanned?.firmwareType === "stock" && (firmware?.sourceSize ?? firmware?.size) === 0x18034);
+  const referenceImage = directImageWrite ? await loadFactoryReference() : undefined;
   const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133", directImageWrite };
   saveOperation(next);
   current = next;
@@ -332,7 +342,7 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
           if (current) current.backupPath = name;
         }
       }
-      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : directImageWrite ? "写入完成" : "写入与回读校验完成", cancellable: false };
+      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : "写入与回读校验完成", cancellable: false };
       if (current) saveOperation(current);
     } catch (e) {
       if (current) {

@@ -83,12 +83,12 @@ test('stock flash uses SPI20 and opcode34, preserves tail, validates complete re
   const d=new StockDevice();const before=d.memory.slice();const c=context(d);await webHidDriver.probe(d);const b=candidate();assert.deepEqual(await webHidDriver.flash(d,b,c),{verified:true});assert.equal(c.backups.length,1);assert.deepEqual(c.backups[0],before);assert.deepEqual(d.erased,[0x1000,0x18000,0]);assert.ok(d.programmed.every(a=>a%4===0&&a<0x19000));assert.deepEqual(d.memory.subarray(0,b.length),b);assert.deepEqual(d.memory.subarray(b.length),before.subarray(b.length));d.restored();
 });
 test('stock direct flash verifies written Flash without creating a backup',async()=>{
-  const d=new StockDevice();const c=context(d);c.directImageWrite=true;await webHidDriver.probe(d);const b=candidate();c.referenceImage=baseline;
+  const d=new StockDevice();const c=context(d);c.directImageWrite=true;await webHidDriver.probe(d);const b=candidate();c.referenceImage=d.memory.slice();
   assert.deepEqual(await webHidDriver.flash(d,b,c),{verified:true});
   assert.equal(c.backups.length,0); assert.ok(d.pages>0); assert.deepEqual(d.erased,[0x1000,0x18000,0]); assert.deepEqual(d.memory.subarray(0,b.length),b); d.restored();
 });
 test('stock direct flash rejects a dropped page instead of claiming completion',async()=>{
-  const d=new StockDevice({dropProgram:true});const c=context(d);c.directImageWrite=true;await webHidDriver.probe(d);
+  const d=new StockDevice({dropProgram:true});const c=context(d);c.directImageWrite=true;c.referenceImage=d.memory.slice();await webHidDriver.probe(d);
   await assert.rejects(webHidDriver.flash(d,candidate(),c),/直写扇区回读校验失败/);
   assert.equal(c.backups.length,0);d.restored();
 });
