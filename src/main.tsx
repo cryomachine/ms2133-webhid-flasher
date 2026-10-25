@@ -645,7 +645,7 @@ function App() {
       {error && <div className="error-banner" role="alert"><Icon name="alert"/><div><strong>操作未完成</strong><p>{error}</p></div><button className="dismiss" onClick={() => setError("")} aria-label="关闭错误提示">×</button></div>}
       {operation?.status === "interrupted" && <div className="error-banner" role="status"><Icon name="alert"/><div><strong>发现上次中断的操作</strong><p>{operation.message} 本页保留操作记录和恢复包，不会自动重试擦写。</p></div></div>}
       {operation?.status === "complete" && (operation.kind === "flash" || operation.kind === "restore") && <div className="reconnect-banner" role="status"><Icon name="refresh"/><div><strong>写入完成，请断电重连</strong><p>关闭采集卡所有 USB、HDMI 及外部供电，等待 10 秒后重新接电，再点击“刷新设备”。</p></div></div>}
-      {device?.firmwareType === "rom" && <div className="rom-recovery-banner" role="alert"><Icon name="alert"/><div><strong>设备停在 ROM / U3 upgrade 恢复入口</strong><p>当前为 VID 0x345F、PID 0x0001。网页和 BFC9000 都不会对这个入口发送未经确认的写入命令。请先断开 USB、HDMI 及外部供电，等待 10 秒后只接 USB 重新枚举；若仍为 PID 0001，需要使用与该板卡匹配的 ROM/U3 专用恢复工具或外接 SPI 编程器写入原厂固件。</p></div></div>}
+      {device?.firmwareType === "rom" && <div className="rom-recovery-banner" role="status"><Icon name="alert"/><div><strong>设备处于 U3 Upgrade 恢复入口</strong><p>{device.canWriteFlash ? "原厂 HID/SPI 探测通过，可以在本页备份或恢复固件。Flash 操作时会检查容量及保护状态，写入后回读校验；完成后请断开 USB、HDMI 及外部供电，等待 10 秒再重连。" : "U3 Upgrade 通信探测未通过，请展开“所选接口详情”查看具体错误。可先断开 USB、HDMI 及外部供电，等待 10 秒后只接 USB，再刷新设备。"}</p></div></div>}
       <div className="workspace">
         <div className="workflow-column">
           <section className="panel device-panel" aria-labelledby="device-heading">

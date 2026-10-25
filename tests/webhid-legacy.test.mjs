@@ -53,9 +53,58 @@ export class StockDevice {
   restored(){assert.equal(this.xdata.get(0xf01f),0x20);for(const [a,v]of [[0xa0,0x94],[0xb0,0x5c],[0xc7,0x22],[0xca,0xf3]])assert.equal(this.sfr.get(a),v);}
 }
 export function context(d){const updates=[],backups=[],logs=[];return {operationMode:'flash',updates,backups,logs,update(v){updates.push(v);},log(message){logs.push(message);},isCancelled(){return false;},async saveBackup(b){assert.equal(d.erased.length,0);backups.push(b.slice());}};}
-test('precise stock descriptor probes B5/C5 only, and ROM is enumerated without guesses',async()=>{
+test('precise stock and U3 descriptors use only B5/C5 during probe',async()=>{
   const d=new StockDevice();const p=await webHidDriver.probe(d);assert.equal(p.canReadFlash,true);assert.equal(p.canWriteFlash,true);assert.equal(p.firmwareType,'stock');assert.equal(p.featureReportLength,9);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
-  const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.firmwareType,'rom');assert.equal(r.canWriteFlash,false);assert.equal(rom.calls,0);assert.match(r.detail,/ROM/);
+  const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.firmwareType,'rom');assert.equal(r.canWriteFlash,true);assert.deepEqual([...rom.opcodes.keys()],[0xb5,0xc5]);assert.match(r.detail,/U3 Upgrade/);
+});
+test('Windows flattened U3 pads every command and verifies writes while preserving tail',async()=>{
+  const d=new StockDevice({windowsFlat:true,viewOffset:5});d.productId=1;d.productName='U3 Upgrade';
+  const info=await webHidDriver.probe(d);
+  assert.equal(info.firmwareType,'rom');assert.equal(info.canWriteFlash,true);assert.equal(info.featureReportLength,4096);
+  assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);assert.match(info.detail,/4095/);
+  const before=d.memory.slice(),c=context(d),b=candidate();
+  assert.deepEqual(await webHidDriver.flash(d,b,c),{verified:true});
+  assert.deepEqual(c.backups,[before]);assert.deepEqual(d.erased,[0x1000,0x18000,0]);
+  assert.deepEqual(d.memory.subarray(0,b.length),b);assert.deepEqual(d.memory.subarray(b.length),before.subarray(b.length));d.restored();
+});
+test('Windows flattened U3 data-only replies preserve leading Flash byte 01',async()=>{
+  const d=new StockDevice({windowsFlat:true,noReportId:true,maxResponses:4095,viewOffset:7});d.productId=1;d.productName='U3 Upgrade';d.memory[0]=1;
+  assert.equal((await webHidDriver.probe(d)).canReadFlash,true);
+  assert.deepEqual(await webHidDriver.backup(d,context(d)),d.memory);d.restored();
+});
+test('Windows canonical U3 accepts maximum-size replies and ID-inclusive descriptor lengths',async()=>{
+  const d=new StockDevice({maxResponses:4097});d.productId=1;d.productName='U3 Upgrade';
+  d.collections[0].featureReports[1].items[0].reportCount=64;
+  d.collections[0].featureReports[2].items[0].reportCount=4096;
+  assert.equal((await webHidDriver.probe(d)).canReadFlash,true);
+  assert.deepEqual(await webHidDriver.backup(d,context(d)),d.memory);d.restored();
+});
+test('U3 with only the short report is admitted after register echoes',async()=>{
+  const d=new StockDevice();d.productId=1;d.collections[0].featureReports=d.collections[0].featureReports.slice(0,1);
+  assert.equal((await webHidDriver.probe(d)).canReadFlash,true);
+  assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
+});
+test('U3 rejects unknown report shapes without ROI or register commands',async()=>{
+  for(const count of [0,7,264,4094,4096]){
+    const d=new StockDevice();d.productId=1;d.collections[0].featureReports=[{reportId:1,items:[{reportSize:8,reportCount:count}]}];
+    const info=await webHidDriver.probe(d);assert.equal(info.canWriteFlash,false);assert.equal(d.calls,0);
+  }
+});
+test('U3 failed register envelope never enables Flash',async()=>{
+  const d=new StockDevice({windowsFlat:true,inconsistentEnvelope:true});d.productId=1;d.productName='U3 Upgrade';
+  const info=await webHidDriver.probe(d);assert.equal(info.firmwareType,'rom');assert.equal(info.canWriteFlash,false);
+  assert.match(info.detail,/响应长度不符合|封装前后不一致/);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
+  await assert.rejects(webHidDriver.flash(d,candidate(),context(d)),/未通过/);assert.equal(d.erased.length,0);
+});
+test('U3 unknown JEDEC never erases or programs',async()=>{
+  const d=new StockDevice({windowsFlat:true,unknownFlash:true});d.productId=1;d.productName='U3 Upgrade';
+  await webHidDriver.probe(d);await assert.rejects(webHidDriver.flash(d,candidate(),context(d)),/Flash容量/);
+  assert.equal(d.erased.length,0);assert.equal(d.programmed.length,0);d.restored();
+});
+test('U3 dropped write fails readback before the boot header is erased',async()=>{
+  const d=new StockDevice({windowsFlat:true,dropProgram:true});d.productId=1;d.productName='U3 Upgrade';
+  await webHidDriver.probe(d);await assert.rejects(webHidDriver.flash(d,candidate(),context(d)),/扇区回读校验失败/);
+  assert.deepEqual(d.erased,[0x1000]);d.restored();
 });
 test('Windows descriptor variant with ID-inclusive large reports remains stock SPI',async()=>{
   const d=new StockDevice();

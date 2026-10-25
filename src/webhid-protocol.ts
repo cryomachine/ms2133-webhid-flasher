@@ -135,9 +135,10 @@ function windowsFlatStockShape(device: BrowserHidDevice, sizes: Map<number, numb
   // Win32 HID can flatten the three original Feature reports into one
   // report-ID-1 entry. The descriptor then advertises the largest 4095-byte
   // data area, while the firmware still accepts the original 8-byte B5/C5/F7
-  // command protocol. USB3 Video is the device product string observed for
-  // this Windows path; the B5/C5 echo probe below remains the final gate.
-  return /^USB3 Video/i.test(device.productName || "") &&
+  // command protocol. U3 Upgrade uses the same register path (upstream
+  // 9fc97b2) with PID 0001 and a different product string. Both still require
+  // the B5/C5 echo probe below; the product name never grants write access.
+  return (device.productId === ROM_PRODUCT_ID || /^USB3 Video/i.test(device.productName || "")) &&
     sizes.get(1) === 4095;
 }
 function legacyShape(device: BrowserHidDevice, sizes = featureSizes(device.collections)): "canonical" | "windows-flat" | null {
@@ -167,27 +168,31 @@ function delay(milliseconds: number): Promise<void> { return new Promise(resolve
 async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo>> {
   probes.set(device, { mode: null, readCapable: false });
   legacyEnvelopes.delete(device);
-  const base: Partial<DeviceInfo> = { canReadFlash: false, canWriteFlash: false, firmwareType: "unknown" };
+  const isU3 = device.productId === ROM_PRODUCT_ID;
+  const base: Partial<DeviceInfo> = { canReadFlash: false, canWriteFlash: false, firmwareType: isU3 ? "rom" : "unknown" };
   if (device.vendorId !== MS2133_VENDOR_ID)
     return { ...base, status: "error", detail: "所选接口的厂商ID不是MS2133，未发送设备命令。" };
   const sizes = featureSizes(device.collections);
   const size = sizes.get(REPORT_ID) ?? 0;
-  if (device.productId === ROM_PRODUCT_ID) return { ...base, firmwareType: "rom", featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
+  featureSizeCache.set(device, sizes);
+  flatReportBuffers.delete(device);
   if (size < 8) return { ...base, status: "error", detail: "接口未声明报告ID 1的8字节命令区，未发送设备命令。" };
   const legacy = legacyShape(device, sizes);
-  if (legacy) {
+  if (legacy || (isU3 && size === 8)) {
     try {
       const result = await opened(device, async () => {
         await legacyReadXdata(device, 0xf01f);
         await legacyReadSfr(device, 0xa0);
         return {
           ...base,
-          firmwareType: "stock" as const,
+          firmwareType: isU3 ? "rom" as const : "stock" as const,
           featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1,
           status: "reachable" as const,
           canReadFlash: true,
           canWriteFlash: true,
-          detail: legacy === "windows-flat"
+          detail: isU3
+            ? `U3 Upgrade 已通过原厂B5/C5只读探测；${legacy === "windows-flat" ? "Windows ID1命令已补齐至4095字节；" : ""}Flash操作仍需确认JEDEC、保护状态并执行写后回读校验。`
+            : legacy === "windows-flat"
             ? "已确认Windows扁平化原厂HID接口（ID1最大4095字节）及B5/C5读取；命令已按Windows报告长度补齐，读写使用原厂SPI事务，写入前仍需完整备份与容器验证。"
             : "已确认原厂三报告接口（ID1=8、ID2=63、ID3=4095字节）及B5/C5读取；读写使用原厂SPI事务，写入前仍需完整备份与容器验证。",
         };
@@ -196,9 +201,10 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
       return result;
     } catch (error) {
       probes.set(device, {mode: null, readCapable: false});
-      return { ...base, firmwareType: "stock", featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1, status: "error", detail: `原厂HID接口通信失败，未执行擦写。${errorText(error)}` };
+      return { ...base, firmwareType: isU3 ? "rom" : "stock", featureReportLength: size + 1, status: "error", detail: `${isU3 ? "U3 Upgrade" : "原厂HID接口"}通信失败（ID1数据区${size}字节），未执行擦写。${errorText(error)}` };
     }
   }
+  if (isU3) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: `U3 Upgrade报告ID 1数据区为${size}字节，未匹配已支持的8/4095字节命令结构；未发送设备命令。` };
   // BFC selects this ROI extension only for native length 265 (264 data bytes).
   // Stock firmware advertises a different report size and must receive no ROI probes.
   if (size !== 264) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: `报告ID 1数据区为${size}字节；当前不是已确认的264字节ROI接口，未发送设备命令，备份和擦写均未开放。` };
@@ -328,7 +334,7 @@ function validLegacyResponseLength(device: BrowserHidDevice, length: number, inc
     return length === (includesReportId ? 4096 : 4095);
   if (!stockShape(sizes)) return false;
   const idInclusiveLarge = sizes.get(2) === 64 && sizes.get(3) === 4096;
-  const windowsUsbVideo = /^USB3 Video/i.test(device.productName || "");
+  const windowsUsbVideo = device.productId === ROM_PRODUCT_ID || /^USB3 Video/i.test(device.productName || "");
   return length === (includesReportId
     ? idInclusiveLarge || windowsUsbVideo ? 4097 : 4096
     : idInclusiveLarge ? 4096 : 4095);
@@ -730,7 +736,7 @@ async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context
         }
         context.log(`扇区0x${address.toString(16)}擦写及回读一致（${index + 1}/${changed.length}）`);
       }
-      if (session.readSector) {
+      if (session.readSector && device.productId !== ROM_PRODUCT_ID) {
         // The stock protocol verifies every changed sector immediately after
         // programming it. All writable sectors were also re-read immediately
         // before the first erase, and untouched sectors are never addressed by
@@ -741,7 +747,7 @@ async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context
         context.log(`原厂接口已完成变更扇区回读校验；跳过重复整片回读，容器SHA-256 ${await sha256(image)}。断电冷启动验证仍需进行。`, "success");
       } else {
         for (let address = 0; address < session.capacity; address += unit) {
-          if (!sameBytes(await session.read(address), target.subarray(address, address + unit)))
+          if (!sameBytes(await (session.readSector ? session.readSector(address) : session.read(address)), target.subarray(address, address + unit)))
             throw new Error(`整片最终校验失败，地址0x${address.toString(16)}。`);
           context.update({phase: "最终整片校验", progress: 80 + Math.floor((address + unit) / session.capacity * 19), message: `${address + unit}/${session.capacity}字节，包含保留尾部`, cancellable: false});
         }
