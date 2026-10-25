@@ -16,7 +16,8 @@ files = set()
 # Do not inspect a parent workspace's Git index.
 if (root / ".git").exists():
     tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root)
-    files.update(Path(p.decode()) for p in tracked.split(b"\0") if p)
+    files.update(relative for relative in (Path(p.decode()) for p in tracked.split(b"\0") if p)
+                 if (root / relative).exists())
 for parent, directories, names in os.walk(root):
     # Prune build/dependency trees instead of traversing them and filtering later.
     for directory in list(directories):

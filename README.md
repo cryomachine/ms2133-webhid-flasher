@@ -1,20 +1,20 @@
 # MS2133 WebHID Flasher
 
-基于浏览器 WebHID 的 MS2133 固件备份与刷写工具。可直接使用 HTTPS 在线页面，也可通过 Go 启动器在 `127.0.0.1` 打开静态网页。设备通信由桌面 Chrome / Edge 完成，无需安装原生 USB 驱动后端。
+基于浏览器 WebHID 的 MS2133 工具。使用 HTTPS 在线页面即可完成设备授权、现有协议操作和采集预览；不再提供本地启动器或桌面应用。
 
 **源码仓库和源码包不分发任何固件或设备备份。** 固件由使用者从本机选择，不提供厂商镜像、预置实验固件或下载固件脚本。文件在浏览器本机处理，不上传到 GitHub Pages 或本地静态启动器。
 
-A browser-based MS2133 firmware backup and flashing tool. Use the HTTPS site or the local static launcher. No firmware images are distributed or uploaded.
+A browser-based MS2133 WebHID tool. Use the HTTPS site; no firmware images are distributed or uploaded.
 
 ## 在线使用
 
 在线入口：[MS2133 WebHID Flasher](https://cryomachine.github.io/ms2133-webhid-flasher/)。
 
-1. 使用桌面 Chrome / Edge 打开在线入口。HTTPS 满足 WebHID 的安全上下文要求，无需启动 Go 服务。
+1. 使用桌面 Chrome / Edge 打开在线入口。HTTPS 满足 WebHID 的安全上下文要求，无需安装本地服务。
 2. 点击“连接采集卡”，在浏览器的设备授权对话框中选择采集卡。页面只列出已获授权的设备；首次访问在线页需要在该来源重新授权。
 3. 按[使用流程](#使用流程)先备份，再从本机选择自己的备份或固件。在线站点只提供静态网页，固件、设备备份和恢复包均在本机处理。
 
-浏览器设备授权及 IndexedDB / localStorage 持久记录按 **origin（协议、主机、端口）** 隔离，而非按仓库路径隔离。Pages 使用 `https://cryomachine.github.io`，本地启动器使用 `http://127.0.0.1:17333`，开发页使用 `http://127.0.0.1:1430`；三者的授权和记录互不共享。在 Pages 与 localhost 之间切换时，需要重新授权设备并导入磁盘备份。更换浏览器或清除站点数据也可能清除授权或本机记录。
+浏览器设备授权及 IndexedDB / localStorage 持久记录按 **origin（协议、主机、端口）** 隔离。Pages 使用 `https://cryomachine.github.io`，开发页使用 `http://127.0.0.1:1430`；两者的授权和记录互不共享。在 Pages 与 localhost 之间切换时，需要重新授权设备并导入磁盘备份。更换浏览器或清除站点数据也可能清除授权或本机记录。
 
 ## 目前支持的设备
 
@@ -28,6 +28,7 @@ A browser-based MS2133 firmware backup and flashing tool. Use the HTTPS site or 
 | 刷写固件 | 从本机选择 98,356 字节容器或完整 Flash 备份；统一校验、保存当前备份、写前复核，只修改发生变化的扇区 |
 | 写后验证 | 每个扇区回读，再核对完整 Flash 与保留尾区 |
 | 操作恢复信息 | 在本机浏览器保存备份、操作状态和日志，可导出恢复包 |
+| 全链路延迟测试 | 在 HDMI 源画面绘制编码毫秒计时器，从 UVC 回传帧识别同一标记并统计当前值、中位数、P95、最小/最大值和观测帧率 |
 
 当前写入格式为 98,356 字节（`0x18034`）的 MS2133 启动容器。完整 Flash 备份会在同一个刷写入口中提取启动容器，保留目标设备当前尾区，不做整片备份覆盖。选择容器和选择完整备份使用同一套写前备份、擦写及回读验证流程。
 
@@ -37,8 +38,7 @@ A browser-based MS2133 firmware backup and flashing tool. Use the HTTPS site or 
 
 - 桌面 Chrome / Edge，且浏览器提供 WebHID；Safari、Firefox 和移动浏览器不支持此流程。
 - WebHID 页面须运行在 HTTPS 或 localhost 安全上下文；不能直接用 `file://` 打开构建产物。
-- 源码构建需要 Node.js 22+、npm、Python 3 和 Go 1.22+。
-- 启动器可构建为 macOS arm64 / amd64、Windows amd64、Linux amd64 / arm64；Linux 可能需要配置 HID 设备权限。交叉编译成功不代表所有硬件和平台组合均已验证。
+- 源码构建需要 Node.js 22+ 和 npm。
 
 ## 构建与启动
 
@@ -49,27 +49,7 @@ npm ci
 npm run check:source
 npm test
 npm run build
-mkdir -p build
-go build -trimpath -o build/ms2133-flasher .
-./build/ms2133-flasher
 ```
-
-Windows 可将输出文件名改为 `build/ms2133-flasher.exe`。启动器默认打开 `http://127.0.0.1:17333/`；若自动打开失败，将地址复制到 Chrome / Edge。
-
-```sh
-./build/ms2133-flasher -port 17335
-./build/ms2133-flasher -no-browser
-```
-
-`-port 0` 可自动分配空闲端口，实际地址显示在终端。关闭网页不会停止服务，终端按 Ctrl+C 退出。再次启动会尝试复用已有服务；更换版本前先完成操作并退出旧服务。
-
-构建全部启动器：
-
-```sh
-sh build-launchers.sh
-```
-
-输出位于 `release/`，macOS 应用为本地未签名构建。构建脚本不会添加固件。
 
 ## 刷写固件
 
@@ -88,6 +68,10 @@ sh build-launchers.sh
 4. 写入前必须完成当前设备备份保存。点击“下载备份”，确认文件保存后按页面提示继续；普通下载路径还需要点击“已保存备份，继续”。保存门槛通过前不会擦除。
 5. 等待擦写与完整回读验证结束，以验证结果判断成功。首次擦除前可取消，擦除开始后取消锁定。过程中不要拔出设备或关闭页面。
 
+### 全链路延迟测试
+
+在“固件状态”页启动采集预览，选择需要测试的六档裁切尺寸，然后在“全链路延迟测试”面板显示中心浮窗并点击“开始延迟测试”。浮窗只覆盖屏幕中心的计时器和编码标记，周围原画面保持可见；采集端从 UVC 回传帧解码同一标记并计算端到端差值。测试页面和采集卡应运行在同一台电脑上，以便使用同一系统时钟；跨主机时钟偏移会直接成为结果偏差。结果是浏览器视频管线的实测值，仍会受到浏览器调度、显示器扫描和 UVC 驱动缓冲影响。
+
 恢复包 JSON 用于保存备份和操作信息，不是可直接刷写的固件文件。浏览器记录受上述 origin 隔离与站点数据清理影响，磁盘备份应独立保留。
 
 中断后不会自动续写或重复擦除。重新连接并根据实际可用接口处理恢复；需要切换固件枚举模式时，可能须断开 USB、HDMI 等全部供电后重连。
@@ -98,9 +82,9 @@ sh build-launchers.sh
 npm run dev
 ```
 
-开发地址为 `http://127.0.0.1:1430/`。真实写入使用已部署的静态在线页面，或嵌入已构建静态资源的 Go 启动器，避免开发热更新中断操作。
+开发地址为 `http://127.0.0.1:1430/`。真实操作使用已部署的静态在线页面；本地开发页仅用于前端检查。
 
-`npm test` 使用离线 mock，不枚举或写入真实设备，也不能覆盖硬件断连、掉电或全部固件版本。CI 执行源码无固件检查、离线测试、前端构建和 Go 构建，不连接硬件。Pages 工作流在 `main` 推送或手动触发时运行同样的源码检查、测试和前端构建，并在 `--include-dist` 检查通过后仅部署 `dist/` 静态资源。
+`npm test` 使用离线 mock，不枚举或写入真实设备，也不能覆盖硬件断连、掉电或全部固件版本。CI 执行源码无固件检查、离线测试和前端构建，不连接硬件。Pages 工作流在 `main` 推送或手动触发时运行同样的源码检查、测试和前端构建，并在 `--include-dist` 检查通过后仅部署 `dist/` 静态资源。
 
 | 入口 | 用途 |
 | --- | --- |
@@ -108,7 +92,7 @@ npm run dev
 | [src/backend.ts](src/backend.ts) | 文件处理、操作状态与备份保存门槛 |
 | [src/webhid-protocol.ts](src/webhid-protocol.ts) | 接口探测、Flash 读写与验证 |
 | [src/storage.ts](src/storage.ts) | 本机浏览器备份和恢复记录 |
-| [launcher.go](launcher.go) | 仅监听回环地址的静态服务 |
+| [src/latency-test.tsx](src/latency-test.tsx) | HDMI 源计时器、编码标记解码和 UVC 全链路延迟统计 |
 
 固件、ROM、设备备份和恢复包不进入 Git；[.gitignore](.gitignore) 已忽略常见设备镜像与备份目录，提交前运行 `npm run check:source`。生成仅含源码的压缩包：
 
