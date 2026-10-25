@@ -67,7 +67,16 @@ function payload(command: Uint8Array, mode: ReportMode, page?: Uint8Array): Uint
   return data;
 }
 async function send(device: BrowserHidDevice, mode: ReportMode, command: Uint8Array, page?: Uint8Array): Promise<void> {
-  const data = payload(command, mode, page);
+  let data = payload(command, mode, page);
+  const sizes = featureSizes(device.collections);
+  if (windowsFlatStockShape(device, sizes)) {
+    const declared = sizes.get(REPORT_ID)!;
+    if (data.length < declared) {
+      const padded = new Uint8Array(declared);
+      padded.set(data);
+      data = padded;
+    }
+  }
   await io(device, () => device.sendFeatureReport(REPORT_ID, data.buffer as ArrayBuffer));
 }
 export function normalizeFeatureReply(view: DataView, opcode: number, minimum = 8): Uint8Array {
@@ -101,7 +110,25 @@ function featureSizes(collections: HidCollection[], sizes = new Map<number, numb
   return sizes;
 }
 function stockShape(sizes: Map<number, number>): boolean {
-  return sizes.size === 3 && sizes.get(1) === 8 && sizes.get(2) === 63 && sizes.get(3) === 4095;
+  if (sizes.get(1) !== 8) return false;
+  // Chrome on Windows can expose the Feature report byte lengths with the
+  // report-ID byte included for the large reports. Both layouts are the same
+  // original SPI interface; B5/C5 probing below remains the final gate.
+  return [63, 64].includes(sizes.get(2) ?? -1) && [4095, 4096].includes(sizes.get(3) ?? -1);
+}
+function windowsFlatStockShape(device: BrowserHidDevice, sizes: Map<number, number>): boolean {
+  // Win32 HID can flatten the three original Feature reports into one
+  // report-ID-1 entry. The descriptor then advertises the largest 4095-byte
+  // data area, while the firmware still accepts the original 8-byte B5/C5/F7
+  // command protocol. USB3 Video is the device product string observed for
+  // this Windows path; the B5/C5 echo probe below remains the final gate.
+  return /^USB3 Video/i.test(device.productName || "") &&
+    sizes.get(1) === 4095;
+}
+function legacyShape(device: BrowserHidDevice, sizes = featureSizes(device.collections)): "canonical" | "windows-flat" | null {
+  if (stockShape(sizes)) return "canonical";
+  if (windowsFlatStockShape(device, sizes)) return "windows-flat";
+  return null;
 }
 async function opened<T>(device: BrowserHidDevice, action: () => Promise<T>): Promise<T> {
   const wasOpened = device.opened;
@@ -132,18 +159,28 @@ async function probeDevice(device: BrowserHidDevice): Promise<Partial<DeviceInfo
   const size = sizes.get(REPORT_ID) ?? 0;
   if (device.productId === ROM_PRODUCT_ID) return { ...base, featureReportLength: size + 1, status: "enumerated", detail: "已枚举MS213xS-ROM恢复接口；该ROM的扇区保留写入事务尚未确认，未发送猜测命令，当前不可擦写。" };
   if (size < 8) return { ...base, status: "error", detail: "接口未声明报告ID 1的8字节命令区，未发送设备命令。" };
-  if (stockShape(sizes)) {
+  const legacy = legacyShape(device, sizes);
+  if (legacy) {
     try {
       const result = await opened(device, async () => {
         await legacyReadXdata(device, 0xf01f);
         await legacyReadSfr(device, 0xa0);
-        return { ...base, featureReportLength: 9, status: "reachable" as const, canReadFlash: true, canWriteFlash: true, detail: "已确认原厂三报告接口（ID1=8、ID2=63、ID3=4095字节）及B5/C5读取；读写使用原厂SPI事务，写入前仍需完整备份与容器验证。" };
+        return {
+          ...base,
+          featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1,
+          status: "reachable" as const,
+          canReadFlash: true,
+          canWriteFlash: true,
+          detail: legacy === "windows-flat"
+            ? "已确认Windows扁平化原厂HID接口（ID1最大4095字节）及B5/C5读取；命令已按Windows报告长度补齐，读写使用原厂SPI事务，写入前仍需完整备份与容器验证。"
+            : "已确认原厂三报告接口（ID1=8、ID2=63、ID3=4095字节）及B5/C5读取；读写使用原厂SPI事务，写入前仍需完整备份与容器验证。",
+        };
       });
       probes.set(device, {mode: "legacy", readCapable: true});
       return result;
     } catch (error) {
       probes.set(device, {mode: null, readCapable: false});
-      return { ...base, featureReportLength: 9, status: "error", detail: `原厂HID接口通信失败，未执行擦写。${errorText(error)}` };
+      return { ...base, featureReportLength: (sizes.get(REPORT_ID) ?? 8) + 1, status: "error", detail: `原厂HID接口通信失败，未执行擦写。${errorText(error)}` };
     }
   }
   // BFC selects this ROI extension only for native length 265 (264 data bytes).
@@ -267,10 +304,18 @@ function legacyRawDescription(view: DataView): string {
   return `rawLength=${raw.length}，viewOffset=${view.byteOffset}，reportId=${REPORT_ID}，prefix16=${prefix}`;
 }
 function validLegacyResponseLength(device: BrowserHidDevice, length: number, includesReportId: boolean): boolean {
-  if (length === (includesReportId ? 9 : 8)) return true;
+  if (length === (includesReportId ? 9 : 8) || length === (includesReportId ? 10 : 9)) return true;
   // macOS may return the interface's largest Feature report even for ID1.
   // This exception is limited to the independently verified stock descriptor.
-  return stockShape(featureSizes(device.collections)) && length === (includesReportId ? 4096 : 4095);
+  const sizes = featureSizes(device.collections);
+  if (windowsFlatStockShape(device, sizes))
+    return length === (includesReportId ? 4096 : 4095);
+  if (!stockShape(sizes)) return false;
+  const idInclusiveLarge = sizes.get(2) === 64 && sizes.get(3) === 4096;
+  const windowsUsbVideo = /^USB3 Video/i.test(device.productName || "");
+  return length === (includesReportId
+    ? idInclusiveLarge || windowsUsbVideo ? 4097 : 4096
+    : idInclusiveLarge ? 4096 : 4095);
 }
 async function legacyRegisterQuery(device: BrowserHidDevice, command: Uint8Array, echoBytes: number): Promise<Uint8Array> {
   await send(device, "short", command);

@@ -9,7 +9,7 @@ export class StockDevice {
   collections=[{usagePage:0xff00,usage:1,featureReports:[8,63,4095].map((n,i)=>({reportId:i+1,items:[{reportSize:8,reportCount:n}]})),children:[]}];
   memory=new Uint8Array(0x40000).fill(255);sfr=new Map([[0xa0,0x94],[0xb0,0x5c],[0xc7,0x22],[0xca,0xf3],[0xc8,0xc0],[0xc9,0]]);xdata=new Map([[0xf01f,0x20],[0xf58a,0],[0xfe8a,0]]);
   opcodes=new Map();last=null;bus=[];selected=false;sr=0;pageAddress=0;pages=0;erased=[];programmed=[];calls=0;pendingWrites=0;
-  constructor(options={}){this.options=options;this.memory.set(baseline);this.memory.set([5,6,7],0x18060);this.memory.set([9,10,11],0x21000);}
+  constructor(options={}){this.options=options;if(options.windowsFlat)this.collections=[{usagePage:0xff00,usage:1,featureReports:[{reportId:1,items:[{reportSize:8,reportCount:4095}]}],children:[]}];this.memory.set(baseline);this.memory.set([5,6,7],0x18060);this.memory.set([9,10,11],0x21000);}
   async open(){this.opened=true;}async close(){this.opened=false;}
   spiByte(value){
     assert.ok(this.selected);this.bus.push(value);const i=this.bus.length-2;
@@ -28,7 +28,7 @@ export class StockDevice {
     }
   }
   async sendFeatureReport(id,source){
-    assert.equal(id,1);const d=new Uint8Array(source);assert.equal(d.length,8);this.last=d;this.calls++;this.opcodes.set(d[0],(this.opcodes.get(d[0])??0)+1);
+    assert.equal(id,1);const d=new Uint8Array(source);assert.equal(d.length,this.options.windowsFlat?4095:8);this.last=d.subarray(0,8);this.calls++;this.opcodes.set(d[0],(this.opcodes.get(d[0])??0)+1);
     assert.ok(![0x52,0xf4,0xf8,0xfb,0xfe].includes(d[0]),'ROI/chip erase forbidden on stock');
     if(d[0]===0xb6)this.xdata.set(d[1]*256+d[2],d[3]);
     else if(d[0]===0xc6){const a=d[1],v=d[2],old=this.sfr.get(a)??0;if(a===0xa0)this.select(v,old);if(a===0xc9)this.sfr.set(a,this.spiByte(v));else this.sfr.set(a,v);}
@@ -45,7 +45,7 @@ export class StockDevice {
     let withId=!this.options.noReportId;
     if(this.options.inconsistentEnvelope&&d[0]===0xc5)withId=!withId;
     const raw=Uint8Array.from(withId?[1,...p]:p);
-    const length=this.options.maxResponses??(this.options.paddedChunks&&d[0]===0xf7?this.options.paddedChunks:raw.length);
+    const length=this.options.maxResponses??(this.options.paddedChunks&&d[0]===0xf7?this.options.paddedChunks:(this.options.windowsFlat?4096:raw.length));
     const offset=this.options.viewOffset??0;
     const padded=new Uint8Array(length+offset).fill(0xa5);padded.set(raw,offset);
     return new DataView(padded.buffer,offset,length);
@@ -56,6 +56,25 @@ export function context(d){const updates=[],backups=[],logs=[];return {operation
 test('precise stock descriptor probes B5/C5 only, and ROM is enumerated without guesses',async()=>{
   const d=new StockDevice();const p=await webHidDriver.probe(d);assert.equal(p.canReadFlash,true);assert.equal(p.canWriteFlash,true);assert.equal(p.featureReportLength,9);assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
   const rom=new StockDevice();rom.productId=1;const r=await webHidDriver.probe(rom);assert.equal(r.canWriteFlash,false);assert.equal(rom.calls,0);assert.match(r.detail,/ROM/);
+});
+test('Windows descriptor variant with ID-inclusive large reports remains stock SPI',async()=>{
+  const d=new StockDevice();
+  d.collections[0].featureReports[1].items[0].reportCount=64;
+  d.collections[0].featureReports[2].items[0].reportCount=4096;
+  const info=await webHidDriver.probe(d);
+  assert.equal(info.canReadFlash,true);assert.equal(info.canWriteFlash,true);
+  assert.deepEqual([...d.opcodes.keys()],[0xb5,0xc5]);
+});
+test('Windows USB3 Video flattened descriptor pads legacy commands and remains stock SPI',async()=>{
+  const d=new StockDevice({windowsFlat:true});d.productName='USB3 Video';
+  const info=await webHidDriver.probe(d);
+  assert.equal(info.canReadFlash,true);assert.equal(info.canWriteFlash,true);assert.equal(info.featureReportLength,4096);
+  assert.deepEqual(await webHidDriver.backup(d,context(d)),d.memory);d.restored();
+});
+test('Windows USB3 Video may return a padded 4097-byte Feature report',async()=>{
+  const d=new StockDevice({paddedChunks:4097});d.productName='USB3 Video';
+  const info=await webHidDriver.probe(d);assert.equal(info.canReadFlash,true);assert.equal(info.canWriteFlash,true);
+  assert.deepEqual(await webHidDriver.backup(d,context(d)),d.memory);d.restored();
 });
 test('stock full backup uses correct F7 raw chunks twice and restores every saved SPI register',async()=>{
   const d=new StockDevice();const before=d.memory.slice();await webHidDriver.probe(d);const b=await webHidDriver.backup(d,context(d));assert.deepEqual(b,before);assert.equal(d.pages,2048);d.restored();assert.equal(d.erased.length,0);assert.equal(d.programmed.length,0);

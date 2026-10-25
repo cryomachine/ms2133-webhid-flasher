@@ -33,7 +33,11 @@ const MARKER_GRID = 8;
 const MARKER_DATA_BITS = 36;
 const MARKER_MODULUS = 0x1000000;
 const MARKER_SPAN_RATIO = 0.18;
-const MARKER_CENTER_Y = 0.56;
+// The UVC square modes are centered on the HDMI frame. Keeping the marker at
+// the geometric center prevents the 192/256/320 crops from clipping its lower
+// rows and keeps the 416 mode aligned with the decoder's ROI.
+const MARKER_CENTER_Y = 0.5;
+const DISPLAY_TIMER_CYCLE_MS = 10_000;
 const MAX_SOURCE_HISTORY = 1200;
 const MAX_SAMPLES = 1200;
 
@@ -73,6 +77,20 @@ function markerSpanRatio(cropPixels: number | null): number {
   return cropPixels != null && cropPixels <= 320 ? 0.14 : MARKER_SPAN_RATIO;
 }
 
+function sourceRoiRatio(cropPixels: number | null): number {
+  const cropScale = cropPixels == null ? 1 : cropPixels / 416;
+  return Math.min(0.82, Math.max(0.45, 0.52 * cropScale));
+}
+
+function capturedMarkerRatio(cropPixels: number | null): number {
+  return cropPixels == null ? markerSpanRatio(null) : markerSpanRatio(cropPixels) / sourceRoiRatio(cropPixels);
+}
+
+function displayTimer(timestamp: number): string {
+  const cycle = ((timestamp % DISPLAY_TIMER_CYCLE_MS) + DISPLAY_TIMER_CYCLE_MS) % DISPLAY_TIMER_CYCLE_MS;
+  return Math.floor(cycle).toString();
+}
+
 function drawMarker(context: CanvasRenderingContext2D, width: number, height: number, timestamp: number, sequence: number, referenceUnit = Math.min(width, height), centerY = height * MARKER_CENTER_Y, spanRatio = MARKER_SPAN_RATIO): void {
   const span = referenceUnit * spanRatio;
   const cell = span / MARKER_GRID;
@@ -98,8 +116,7 @@ function drawFloatingSourceFrame(context: CanvasRenderingContext2D, timestamp: n
   const width = canvas.width;
   const height = canvas.height;
   const unit = Math.min(height, width * 9 / 16);
-  const cropScale = cropPixels ? cropPixels / 416 : 1;
-  const roiRatio = Math.min(0.82, Math.max(0.45, 0.52 * cropScale));
+  const roiRatio = sourceRoiRatio(cropPixels);
   const roiSide = unit * roiRatio;
   const boxLeft = (width - roiSide) / 2;
   const boxTop = height * MARKER_CENTER_Y - roiSide * 0.56;
@@ -113,7 +130,7 @@ function drawFloatingSourceFrame(context: CanvasRenderingContext2D, timestamp: n
   context.textBaseline = "middle";
   context.fillStyle = "#eafff1";
   context.font = `700 ${Math.max(28, Math.round(roiSide * 0.16))}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-  context.fillText(`${(timestamp % 1000000).toFixed(0).padStart(6, "0")} ms`, width / 2, boxTop + roiSide * 0.25);
+  context.fillText(`${displayTimer(timestamp)} ms`, width / 2, boxTop + roiSide * 0.25);
   context.fillStyle = "#8dd9b1";
   context.font = `600 ${Math.max(11, Math.round(roiSide * 0.034))}px ui-monospace, SFMono-Regular, Menlo, monospace`;
   context.fillText(`MS2133 · ${cropPixels ? `${cropPixels}²` : "LATENCY SOURCE"}`, width / 2, boxTop + roiSide * 0.10);
@@ -123,46 +140,91 @@ function drawFloatingSourceFrame(context: CanvasRenderingContext2D, timestamp: n
   drawMarker(context, width, height, Math.floor(timestamp), sequence, unit, height * MARKER_CENTER_Y, markerSpanRatio(cropPixels));
 }
 
-function decodeMarker(context: CanvasRenderingContext2D, width: number, height: number, cropPixels: number | null): { timestamp: number; sequence: number } | null {
-  const span = Math.min(width, height) * markerSpanRatio(cropPixels);
-  const cell = span / MARKER_GRID;
-  const left = (width - span) / 2;
-  const top = height * MARKER_CENTER_Y - span / 2;
-  const sampleLeft = Math.max(0, Math.floor(left));
-  const sampleTop = Math.max(0, Math.floor(top));
-  const sampleSize = Math.max(1, Math.min(Math.ceil(span), Math.min(width - sampleLeft, height - sampleTop)));
-  const image = context.getImageData(sampleLeft, sampleTop, sampleSize, sampleSize).data;
-  const cells: number[] = [];
-  for (let row = 0; row < MARKER_GRID; row += 1) {
-    for (let column = 0; column < MARKER_GRID; column += 1) {
-      const x = Math.max(0, Math.min(sampleSize - 1, Math.floor(left + (column + 0.5) * cell) - sampleLeft));
-      const y = Math.max(0, Math.min(sampleSize - 1, Math.floor(top + (row + 0.5) * cell) - sampleTop));
-      const offset = (y * sampleSize + x) * 4;
-      const luminance = image[offset] * 0.299 + image[offset + 1] * 0.587 + image[offset + 2] * 0.114;
-      cells.push(luminance >= 128 ? 1 : 0);
+function decodeMarker(context: CanvasRenderingContext2D, width: number, height: number, cropPixels: number | null, receivedEpoch: number): { timestamp: number; sequence: number } | null {
+  const expectedSpan = Math.min(width, height) * capturedMarkerRatio(cropPixels);
+  const centerX = width / 2;
+  const centerY = height * MARKER_CENTER_Y;
+  const searchSpan = Math.max(8, Math.ceil(expectedSpan * 1.65));
+  const sampleLeft = Math.max(0, Math.min(width - searchSpan, Math.floor(centerX - searchSpan / 2)));
+  const sampleTop = Math.max(0, Math.min(height - searchSpan, Math.floor(centerY - searchSpan / 2)));
+  const image = context.getImageData(sampleLeft, sampleTop, searchSpan, searchSpan).data;
+  const scaleCandidates = [0.72, 0.84, 1, 1.16, 1.3];
+  const offsetCandidates = [-0.1, 0, 0.1];
+  const candidates: Array<{ marker: { timestamp: number; sequence: number }; score: number }> = [];
+  const readPixelLuminance = (x: number, y: number): number => {
+    const offset = (y * searchSpan + x) * 4;
+    return image[offset] * 0.299 + image[offset + 1] * 0.587 + image[offset + 2] * 0.114;
+  };
+  for (const scale of scaleCandidates) {
+    const span = expectedSpan * scale;
+    const cell = span / MARKER_GRID;
+    for (const offsetX of offsetCandidates) {
+      for (const offsetY of offsetCandidates) {
+        const left = centerX - span / 2 + offsetX * expectedSpan;
+        const top = centerY - span / 2 + offsetY * expectedSpan;
+        const cells: number[] = [];
+        let pixelScore = 0;
+        let pixelCount = 0;
+        for (let row = 0; row < MARKER_GRID; row += 1) {
+          for (let column = 0; column < MARKER_GRID; column += 1) {
+            const expected = (row + column) % 2 === 0 ? 1 : 0;
+            const cellLeft = Math.max(0, Math.floor(left + column * cell));
+            const cellTop = Math.max(0, Math.floor(top + row * cell));
+            const cellRight = Math.min(width, Math.ceil(left + (column + 1) * cell));
+            const cellBottom = Math.min(height, Math.ceil(top + (row + 1) * cell));
+            let white = 0;
+            let dark = 0;
+            // Sample a 4×4 interior grid. This is still pixel-level matching,
+            // while keeping the work bounded at high frame rates (the source
+            // can be 240 fps and a full cell-area scan would be excessive).
+            for (let sampleY = 1; sampleY <= 4; sampleY += 1) {
+              for (let sampleX = 1; sampleX <= 4; sampleX += 1) {
+                const x = cellLeft + Math.floor((cellRight - cellLeft) * sampleX / 5);
+                const y = cellTop + Math.floor((cellBottom - cellTop) * sampleY / 5);
+                const localX = x - sampleLeft;
+                const localY = y - sampleTop;
+                if (localX < 0 || localY < 0 || localX >= searchSpan || localY >= searchSpan) continue;
+                const isWhite = readPixelLuminance(localX, localY) >= 128;
+                if (isWhite) white += 1; else dark += 1;
+                pixelCount += 1;
+              }
+            }
+            const value = white >= dark ? 1 : 0;
+            cells.push(value);
+            if (value === expected) pixelScore += Math.max(white, dark);
+          }
+        }
+        let borderScore = 0;
+        for (let row = 0; row < MARKER_GRID; row += 1) {
+          for (let column = 0; column < MARKER_GRID; column += 1) {
+            if (row !== 0 && row !== MARKER_GRID - 1 && column !== 0 && column !== MARKER_GRID - 1) continue;
+            if (cells[row * MARKER_GRID + column] === ((row + column) % 2 === 0 ? 1 : 0)) borderScore += 1;
+          }
+        }
+        const score = borderScore * 1000 + (pixelCount ? pixelScore / pixelCount : 0);
+        if (borderScore < 22) continue;
+        const bits: number[] = [];
+        for (let dataRow = 1; dataRow < MARKER_GRID - 1; dataRow += 1) {
+          for (let dataColumn = 1; dataColumn < MARKER_GRID - 1; dataColumn += 1) bits.push(cells[dataRow * MARKER_GRID + dataColumn]);
+        }
+        let value = 0;
+        for (let bit = 0; bit < 32; bit += 1) value |= bits[bit] << bit;
+        let checksum = 0;
+        for (let bit = 0; bit < 32; bit += 1) checksum = (checksum + bits[bit]) & 0xf;
+        let encodedChecksum = 0;
+        for (let bit = 0; bit < 4; bit += 1) encodedChecksum |= bits[32 + bit] << bit;
+        if (checksum === encodedChecksum) {
+          candidates.push({ marker: { timestamp: value & 0xffffff, sequence: (value >>> 24) & 0xff }, score });
+        }
+      }
     }
   }
-  let borderScore = 0;
-  for (let row = 0; row < MARKER_GRID; row += 1) {
-    for (let column = 0; column < MARKER_GRID; column += 1) {
-      if (row !== 0 && row !== MARKER_GRID - 1 && column !== 0 && column !== MARKER_GRID - 1) continue;
-      const expected = (row + column) % 2 === 0 ? 1 : 0;
-      if (cells[row * MARKER_GRID + column] === expected) borderScore += 1;
-    }
-  }
-  if (borderScore < 18) return null;
-  const bits: number[] = [];
-  for (let row = 1; row < MARKER_GRID - 1; row += 1) {
-    for (let column = 1; column < MARKER_GRID - 1; column += 1) bits.push(cells[row * MARKER_GRID + column]);
-  }
-  let value = 0;
-  for (let bit = 0; bit < 32; bit += 1) value |= bits[bit] << bit;
-  let checksum = 0;
-  for (let bit = 0; bit < 32; bit += 1) checksum = (checksum + bits[bit]) & 0xf;
-  let encodedChecksum = 0;
-  for (let bit = 0; bit < 4; bit += 1) encodedChecksum |= bits[32 + bit] << bit;
-  if (checksum !== encodedChecksum) return null;
-  return { timestamp: value & 0xffffff, sequence: (value >>> 24) & 0xff };
+  if (candidates.length === 0) return null;
+  // Recursive browser captures can contain several valid markers at different
+  // scales. Pick the marker whose unwrapped timestamp is closest to this
+  // received frame, rather than whichever candidate happened to score first.
+  candidates.sort((first, second) => Math.abs(unwrapTimestamp(first.marker.timestamp, receivedEpoch) - receivedEpoch) - Math.abs(unwrapTimestamp(second.marker.timestamp, receivedEpoch) - receivedEpoch) || second.score - first.score);
+  return candidates[0].marker;
 }
 
 function unwrapTimestamp(encoded: number, receivedEpoch: number): number {
@@ -242,7 +304,7 @@ export function LatencyTest({ videoRef, stream, activeCrop }: LatencyTestProps) 
     });
   }, []);
 
-  const processFrame = useCallback((video: VideoWithFrameCallback) => {
+  const processFrame = useCallback((video: VideoWithFrameCallback, frameMetadata?: VideoFrameCallbackMetadata) => {
     if (!running) return;
     const width = video.videoWidth;
     const height = video.videoHeight;
@@ -262,12 +324,18 @@ export function LatencyTest({ videoRef, stream, activeCrop }: LatencyTestProps) 
     if (!context) return;
     context.drawImage(video, 0, 0, sampleWidth, sampleHeight);
     captureFramesRef.current += 1;
-    const marker = decodeMarker(context, sampleWidth, sampleHeight, activeCrop);
+    const receivedNow = frameMetadata?.expectedDisplayTime ?? performance.now();
+    const receivedEpoch = performance.timeOrigin + receivedNow;
+    const marker = decodeMarker(context, sampleWidth, sampleHeight, activeCrop, receivedEpoch);
     if (!marker) {
       invalidRef.current += 1;
       return;
     }
-    const receivedEpoch = performance.timeOrigin + performance.now();
+    // requestVideoFrameCallback() invokes the handler after the frame has
+    // entered the compositor. `performance.now()` measures handler dispatch
+    // time and adds a vsync/scheduling delay (about 10 ms in the 240 fps
+    // capture path). Use the browser's expected presentation timestamp so the
+    // result matches the frame that is visibly on screen.
     const sourceEpoch = sourceHistoryRef.current.get(marker.timestamp) ?? unwrapTimestamp(marker.timestamp, receivedEpoch);
     const latency = receivedEpoch - sourceEpoch;
     if (!Number.isFinite(latency) || latency < -100 || latency > 60000) {
@@ -293,11 +361,20 @@ export function LatencyTest({ videoRef, stream, activeCrop }: LatencyTestProps) 
     if (!video) return;
     const next = () => {
       if (!running) return;
-      processFrame(video);
-      if (video.requestVideoFrameCallback) frameCallbackRef.current = video.requestVideoFrameCallback(() => next());
-      else fallbackFrameTimerRef.current = window.setTimeout(next, 16);
+      if (video.requestVideoFrameCallback) {
+        frameCallbackRef.current = video.requestVideoFrameCallback((_now, metadata) => {
+          processFrame(video, metadata);
+          void next();
+        });
+      } else {
+        processFrame(video);
+        fallbackFrameTimerRef.current = window.setTimeout(next, 16);
+      }
     };
-    if (video.requestVideoFrameCallback) frameCallbackRef.current = video.requestVideoFrameCallback(() => next());
+    if (video.requestVideoFrameCallback) frameCallbackRef.current = video.requestVideoFrameCallback((_now, metadata) => {
+      processFrame(video, metadata);
+      void next();
+    });
     else next();
   }, [processFrame, running, stopFrameLoop, videoRef]);
 
