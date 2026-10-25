@@ -4,7 +4,7 @@ import { callBackend as invoke, requestWebDevice, webMode } from "./backend";
 import "./webhid-protocol";
 import type { DeviceInfo, FirmwareInfo, LogEntry, OperationState, ScanResult } from "./types";
 import type { RecoverySummary } from "./storage";
-import { runSixModeCaptureTest } from "./video-mode-test";
+import { runSixModeCaptureTest, SIX_CAPTURE_TEST_MODES } from "./video-mode-test";
 import type { SixCaptureTestResult, VideoModeDescriptor } from "./video-mode-test";
 import { LatencyTest } from "./latency-test";
 import "./style.css";
@@ -28,6 +28,8 @@ const hex = (value?: number | null) => value == null ? "—" : `0x${value.toStri
 const size = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 const statusName: Record<DeviceInfo["status"], string> = { enumerated: "已枚举", reachable: "可通信", update: "升级接口", busy: "接口占用", error: "探测异常" };
 const errorText = (e: unknown) => typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+type NativeVideoConstraints = MediaTrackConstraints & { resizeMode?: ConstrainDOMString };
+type ExtendedMediaTrackCapabilities = MediaTrackCapabilities & { resizeMode?: string[] };
 
 function waitForPreviewFrame(video: HTMLVideoElement, pixels: number, timeoutMs = 1500): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -66,7 +68,7 @@ function waitForPreviewFrame(video: HTMLVideoElement, pixels: number, timeoutMs 
   });
 }
 
-function applyTrackConstraintsWithTimeout(track: MediaStreamTrack, constraints: MediaTrackConstraints, timeoutMs: number): Promise<void> {
+function applyTrackConstraintsWithTimeout(track: MediaStreamTrack, constraints: NativeVideoConstraints, timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = window.setTimeout(() => {
@@ -101,6 +103,16 @@ const HARDWARE_CROP_MODES = [192, 256, 320, 416, 512, 640] as const;
 
 type PreviewStats = { width: number; height: number; frameRate: number | null; label: string; state: string };
 
+function capabilityRange(value: MediaSettingsRange | undefined): string {
+  if (!value) return "未声明";
+  return `${value.min}–${value.max}`;
+}
+
+function resizeModeNames(value: string[] | undefined): string {
+  if (!value?.length) return "未声明";
+  return value.join("、");
+}
+
 function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange }: {
   requestedCrop: number | null;
   switching: boolean;
@@ -118,6 +130,7 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
   const [testRunning, setTestRunning] = useState(false);
   const [testProgress, setTestProgress] = useState<{ index: number; total: number; mode: VideoModeDescriptor } | null>(null);
   const [testResults, setTestResults] = useState<SixCaptureTestResult[]>([]);
+  const [capabilities, setCapabilities] = useState<ExtendedMediaTrackCapabilities | null>(null);
   const stableCropRef = useRef<number | null>(null);
   const recoveredCropRef = useRef<number | null | undefined>(undefined);
   const recoveryPendingRef = useRef(false);
@@ -127,6 +140,7 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
     if (videoRef.current) videoRef.current.srcObject = null;
     setStream(null);
     setStats(null);
+    setCapabilities(null);
   }, [stream]);
 
   const enumerateVideoDevices = useCallback(async () => {
@@ -145,14 +159,16 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器没有提供视频采集接口。");
       stop();
-      const video: MediaTrackConstraints = {
+      const video: NativeVideoConstraints = {
         width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 240, max: 240 },
+        resizeMode: { exact: "none" },
         ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
       };
       const next = await navigator.mediaDevices.getUserMedia({ video, audio: false });
       setStream(next);
       const devices = await enumerateVideoDevices();
       const track = next.getVideoTracks()[0];
+      setCapabilities((track?.getCapabilities?.() as ExtendedMediaTrackCapabilities | undefined) ?? null);
       const settings = track?.getSettings();
       setStats({ width: settings?.width ?? 0, height: settings?.height ?? 0, frameRate: settings?.frameRate ?? null, label: track?.label || devices.find(item => item.deviceId === selectedDeviceId)?.label || "视频输入", state: "采集中" });
       return next;
@@ -264,6 +280,7 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
           width: { exact: requestedCrop },
           height: { exact: requestedCrop },
           frameRate: { ideal: 240, max: 240 },
+          resizeMode: { exact: "none" },
         }, 4000);
         if (cancelled) return;
         const settings = track.getSettings();
@@ -314,14 +331,15 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
             setStats(null);
             await new Promise<void>(resolve => window.setTimeout(resolve, 180));
             if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器无法重新打开视频输入");
-            const recoveryVideo: MediaTrackConstraints = fallbackCrop
-              ? { width: { exact: fallbackCrop }, height: { exact: fallbackCrop }, frameRate: { ideal: 240, max: 240 } }
-              : { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 240, max: 240 } };
+            const recoveryVideo: NativeVideoConstraints = fallbackCrop
+              ? { width: { exact: fallbackCrop }, height: { exact: fallbackCrop }, frameRate: { ideal: 240, max: 240 }, resizeMode: { exact: "none" } }
+              : { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 240, max: 240 }, resizeMode: { exact: "none" } };
             if (selectedDeviceId) recoveryVideo.deviceId = { exact: selectedDeviceId };
             const next = await navigator.mediaDevices.getUserMedia({ video: recoveryVideo, audio: false });
             recoveredCropRef.current = fallbackCrop;
             setStream(next);
             const nextTrack = next.getVideoTracks()[0];
+            setCapabilities((nextTrack?.getCapabilities?.() as ExtendedMediaTrackCapabilities | undefined) ?? null);
             const nextSettings = nextTrack?.getSettings();
             setStats({ width: nextSettings?.width ?? 0, height: nextSettings?.height ?? 0, frameRate: nextSettings?.frameRate ?? null, label: nextTrack?.label || "视频输入", state: "采集中" });
             // Wait for the replacement stream to bind and present a real
@@ -373,6 +391,12 @@ function CapturePreview({ requestedCrop, switching, onCropSettled, onBusyChange 
     </div>
     {testResults.length > 0 && <div className="capture-test-results"><div className="section-heading"><div className="heading-title"><Icon name="check"/><h3>六档测试结果</h3></div><span className="quiet-tag">{testResults.filter(result => result.status === "passed").length}/{testResults.length} 通过</span></div><div className="capture-test-table-wrap"><table className="capture-test-table"><thead><tr><th>目标</th><th>实际画面</th><th>轨道 fps</th><th>观测 fps</th><th>帧数</th><th>结果</th></tr></thead><tbody>{testResults.map((result, index) => <tr key={`${result.width}-${result.height}-${index}`}><td>{result.width} × {result.height} @ {result.frameRate}</td><td>{result.actualWidth && result.actualHeight ? `${result.actualWidth} × ${result.actualHeight}` : "—"}</td><td>{result.actualFrameRate ? result.actualFrameRate.toFixed(2) : "—"}</td><td>{result.observedFrameRate ? result.observedFrameRate.toFixed(2) : "—"}</td><td>{result.frameCount}</td><td><span className={`status-pill ${result.status === "passed" ? "reachable" : "error"}`}>{result.status === "passed" ? "通过" : result.error || "失败"}</span></td></tr>)}</tbody></table></div></div>}
     <LatencyTest videoRef={videoRef} stream={stream} activeCrop={displayCrop}/>
+    <div className="capture-declared-modes">
+      <div className="section-heading"><div className="heading-title"><Icon name="check"/><h3>声明的采集画面列表</h3></div><span className="quiet-tag">resizeMode: none</span></div>
+      <p className="section-note">浏览器通常只声明宽高范围，不提供 UVC 离散模式表。下面列出当前轨道能力和本页逐档请求的原生配置；测试禁止浏览器缩放。</p>
+      <dl className="mode-enum-details capture-capability-details"><div><dt>宽度范围</dt><dd>{capabilityRange(capabilities?.width)}</dd></div><div><dt>高度范围</dt><dd>{capabilityRange(capabilities?.height)}</dd></div><div><dt>帧率范围</dt><dd>{capabilityRange(capabilities?.frameRate)}</dd></div><div><dt>缩放模式</dt><dd>{resizeModeNames(capabilities?.resizeMode)}</dd></div></dl>
+      <div className="capture-test-table-wrap"><table className="capture-declared-table"><thead><tr><th>原生配置</th><th>请求帧率</th><th>测试状态</th><th>实际返回</th></tr></thead><tbody>{SIX_CAPTURE_TEST_MODES.map(mode => { const result = testResults.find(item => item.width === mode.width && item.height === mode.height && item.frameRate === mode.frameRate); return <tr key={`${mode.width}-${mode.height}-${mode.frameRate}`}><td>{mode.width} × {mode.height}</td><td>{mode.frameRate} fps</td><td>{result ? <span className={`status-pill ${result.status === "passed" ? "reachable" : "error"}`}>{result.status === "passed" ? "原生通过" : result.error || "不支持"}</span> : <span className="status-pill">未测试</span>}</td><td>{result?.actualWidth && result?.actualHeight ? `${result.actualWidth} × ${result.actualHeight}` : "—"}</td></tr>; })}</tbody></table></div>
+    </div>
   </section>;
 }
 

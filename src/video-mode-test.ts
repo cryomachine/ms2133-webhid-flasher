@@ -4,6 +4,8 @@ export type VideoModeDescriptor = {
   frameRate: number;
 };
 
+type NativeVideoConstraints = MediaTrackConstraints & { resizeMode?: ConstrainDOMString };
+
 export const SIX_CAPTURE_TEST_MODES: readonly VideoModeDescriptor[] = [
   { width: 192, height: 192, frameRate: 240 },
   { width: 256, height: 256, frameRate: 240 },
@@ -30,7 +32,7 @@ function errorText(error: unknown): string {
 
 function applyConstraintsWithTimeout(
   track: MediaStreamTrack,
-  constraints: MediaTrackConstraints,
+  constraints: NativeVideoConstraints,
   timeoutMs: number,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -169,6 +171,7 @@ export async function runSixModeCaptureTest(
         width: { exact: mode.width },
         height: { exact: mode.height },
         frameRate: { ideal: mode.frameRate, max: mode.frameRate },
+        resizeMode: { exact: "none" },
       }, 4000);
       // A UVC mode change can leave the HTMLVideoElement decoding one or
       // more frames from the previous mode. Rebinding the same stream flushes
