@@ -159,6 +159,16 @@ summary { cursor: pointer; color: #5e7769; font-size: 11px; line-height: 1.6; }
 .log-empty { color: #8a9b90; font-size: 11px; padding: 9px 0; line-height: 1.8; }
 .export-path { margin-top: 10px; font-size: 10px; color: #6b8172; overflow-wrap: anywhere; }
 .error-banner { display: flex; align-items: flex-start; gap: 12px; background: #fff3ed; border: 1px solid #efd7c9; color: #a26348; padding: 16px 18px; border-radius: 9px; margin-bottom: 18px; }
+.reconnect-banner { display: flex; align-items: flex-start; gap: 12px; background: #eef7f1; border: 1px solid #c7dfcf; color: #356b4e; padding: 16px 18px; border-radius: 9px; margin-bottom: 18px; }
+.reconnect-banner > .icon { margin-top: 2px; width: 18px; height: 18px; }
+.reconnect-banner > div { flex: 1; min-width: 0; }
+.reconnect-banner strong { font-size: 12px; }
+.reconnect-banner p { font-size: 12px; line-height: 1.8; margin-top: 4px; overflow-wrap: anywhere; }
+.rom-recovery-banner { display: flex; align-items: flex-start; gap: 12px; background: #fff6e7; border: 1px solid #ecd8ad; color: #80612d; padding: 16px 18px; border-radius: 9px; margin-bottom: 18px; }
+.rom-recovery-banner > .icon { margin-top: 2px; width: 18px; height: 18px; }
+.rom-recovery-banner > div { flex: 1; min-width: 0; }
+.rom-recovery-banner strong { font-size: 12px; }
+.rom-recovery-banner p { font-size: 12px; line-height: 1.8; margin-top: 4px; overflow-wrap: anywhere; }
 .error-banner > .icon { margin-top: 2px; width: 18px; height: 18px; }
 .error-banner > div { flex: 1; min-width: 0; }
 .error-banner strong { font-size: 12px; }

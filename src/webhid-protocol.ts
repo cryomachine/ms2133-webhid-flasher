@@ -638,10 +638,24 @@ async function directImageFlash(session: FlashSession, image: Uint8Array, contex
       if (start < end) page.set(image.subarray(start, end));
       if (!page.every(byte => byte === 255)) await session.program(start, page);
     }
+    // Direct writes used to report success as soon as the program commands
+    // returned.  That is unsafe for the boot sector: a lost or rejected page
+    // write can leave the device in the ROM/U3 upgrade PID while the UI still
+    // says "complete".  Verify every byte that belongs to the source image
+    // before allowing the session cleanup and success state.
+    const unit = session.readSector ? 4096 : 256;
+    for (let offset = 0; offset < 4096 && address + offset < writableEnd; offset += unit) {
+      const start = address + offset;
+      const end = Math.min(start + unit, writableEnd);
+      const actual = await (session.readSector ? session.readSector(start) : session.read(start));
+      const expected = image.subarray(start, end);
+      if (!sameBytes(actual.subarray(0, expected.length), expected))
+        throw new Error(`直写扇区回读校验失败，地址0x${start.toString(16)}；请勿继续重试，先断电重连并使用恢复包。`);
+    }
     context.update({ phase: "写入Flash", progress: 5 + Math.floor((index + 1) / order.length * 85), message: `扇区0x${address.toString(16)}已写入`, cancellable: false, destructiveStarted: true });
   }
   update(context, "完成", 99, "写入完成");
-  context.log("写入命令已完成。", "success");
+  context.log("写入及逐扇区回读校验已完成；断电重连后再确认设备是否恢复。", "success");
   return {verified: true};
 }
 async function flashDevice(device: BrowserHidDevice, source: Uint8Array, context: ProtocolContext): Promise<{verified: boolean}> {
