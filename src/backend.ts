@@ -309,6 +309,11 @@ async function webCall(command: string, args: Record<string, unknown>): Promise<
     case "load_saved_backup": return loadSavedBackup();
     case "inspect_firmware": return inspect(String(args.path));
     case "start_backup": return start("backup", String(args.deviceId));
+    // Unified firmware task: both a normalized upgrade container and a
+    // complete backup (already reduced by choose_restore/load_saved_backup)
+    // use the same verified Flash transaction. Keep the legacy commands below
+    // for saved operation records and older clients.
+    case "start_firmware": return start("flash", String(args.deviceId), String(args.firmwarePath));
     case "start_flash": return start("flash", String(args.deviceId), String(args.firmwarePath));
     case "start_restore": return start("restore", String(args.deviceId), String(args.firmwarePath));
     case "get_recovery_summary": return recoverySummary();

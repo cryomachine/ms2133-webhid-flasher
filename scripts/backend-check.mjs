@@ -137,6 +137,22 @@ assert.deepEqual(fileApi.writes, [3, "closed"]);
 assert.equal(continued, true);
 assert.equal((await fileApi.api.callBackend("get_operation")).status, "complete");
 
+// The merged UI uses one firmware task for both a selected container and a
+// normalized full-backup source. The unified command must retain the same
+// Flash context and save barrier as the legacy command.
+continued = false;
+const unified = await prepare(setup(false), async (_device, _image, context) => {
+  assert.equal(context.operationMode, "flash");
+  await context.saveBackup(new Uint8Array([6]), "unified-before.bin");
+  continued = true;
+  return { verified: true };
+}, "start_firmware");
+await unified.api.callBackend("save_pending_backup");
+await unified.api.callBackend("confirm_backup_saved");
+await settle();
+assert.equal(continued, true);
+assert.equal((await unified.api.callBackend("get_operation")).status, "complete");
+
 continued = false;
 const fallback = await prepare(setup(false), async (_device, _image, context) => { await context.saveBackup(new Uint8Array([4]), "fallback.bin"); continued = true; return { verified: true }; });
 await fallback.api.callBackend("save_pending_backup");
