@@ -29,6 +29,8 @@ export interface ProgressUpdate { phase: string; progress: number; message: stri
 export interface ProtocolContext {
   intent?: "backup" | "flash" | "restore";
   operationMode?: "flash" | "restore-builtin" | "restore-file";
+  directStockWrite?: boolean;
+  referenceImage?: Uint8Array;
   update(value: ProgressUpdate): void;
   log(message: string, level?: LogEntry["level"]): void;
   isCancelled(): boolean;
@@ -195,16 +197,48 @@ async function loadSavedBackup(): Promise<FirmwareInfo> {
   }
   return { ...info, target: "MS2133 · 本机已存备份" };
 }
+async function loadFactoryFirmware(): Promise<FirmwareInfo> {
+  const response = await fetch("/firmware/factory.bin", { cache: "no-store" });
+  if (!response.ok) throw new Error("网页内尚未挂载原厂固件：请将原厂 BIN 放入 public/firmware/factory.bin 后重新加载页面。");
+  const source = new Uint8Array(await response.arrayBuffer());
+  const path = `factory-${++fileSequence}/factory.bin`;
+  sourceSizes.set(path, source.length);
+  files.set(path, source.length > 0x18034 ? source.slice(0, 0x18034) : source);
+  try {
+    const info = await inspect(path);
+    if (!info.valid) throw new Error(info.errors.join("；"));
+    return { ...info, target: "MS2133 · 内置原厂固件" };
+  } catch (error) {
+    files.delete(path); sourceSizes.delete(path);
+    throw new Error(`内置原厂 BIN 校验失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+async function loadFactoryReference(): Promise<Uint8Array | undefined> {
+  const response = await fetch("/firmware/factory.bin", { cache: "no-store" });
+  if (!response.ok) return undefined;
+  const source = new Uint8Array(await response.arrayBuffer());
+  const image = source.length > 0x18034 ? source.slice(0, 0x18034) : source;
+  const path = `factory-reference-${++fileSequence}/factory.bin`;
+  sourceSizes.set(path, source.length); files.set(path, image);
+  try {
+    const info = await inspect(path);
+    return info.valid ? image : undefined;
+  } finally {
+    files.delete(path); sourceSizes.delete(path);
+  }
+}
 function download(data: Uint8Array, name: string): void {
   const copy = new Uint8Array(data.byteLength); copy.set(data);
   const url = URL.createObjectURL(new Blob([copy.buffer], { type: "application/octet-stream" }));
   const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-function context(): ProtocolContext {
+function context(referenceImage?: Uint8Array): ProtocolContext {
   return {
     intent: current?.kind === "restore" ? "restore" : current?.kind === "flash" ? "flash" : "backup",
     operationMode: current?.kind === "restore" ? "restore-file" : "flash",
+    directStockWrite: current?.directStockWrite === true,
+    referenceImage,
     update: value => {
       if (current) {
         const destructiveStarted = Boolean(current.destructiveStarted || value.destructiveStarted || value.phase === "擦除Flash");
@@ -271,10 +305,12 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
   const id = `web-${Date.now()}`;
   recovery = { id, createdAt: new Date().toISOString(), device: scanned!, firmware, image: image ? new Uint8Array(image) : undefined };
   await putRecovery(recovery);
-  const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133" };
+  const directStockWrite = kind !== "backup" && scanned?.firmwareType === "stock";
+  const referenceImage = directStockWrite && kind === "flash" ? await loadFactoryReference() : undefined;
+  const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133", directStockWrite };
   saveOperation(next);
   current = next;
-  const ctx = context();
+  const ctx = context(referenceImage);
   const activeDriver = driver;
   const snapshot = { ...current, logs: [...current.logs] };
   void (async () => {
@@ -296,7 +332,7 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
           if (current) current.backupPath = name;
         }
       }
-      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : "写入与回读校验完成", cancellable: false };
+      if (current) current = { ...current, status: "complete", phase: "完成", progress: 100, message: kind === "backup" ? "备份已交给浏览器下载" : directStockWrite ? "写入完成" : "写入与回读校验完成", cancellable: false };
       if (current) saveOperation(current);
     } catch (e) {
       if (current) {
@@ -314,6 +350,7 @@ async function webCall(command: string, args: Record<string, unknown>): Promise<
     case "choose_firmware": return chooseFile();
     case "choose_restore": return chooseFile(true);
     case "load_saved_backup": return loadSavedBackup();
+    case "load_factory_firmware": return loadFactoryFirmware();
     case "inspect_firmware": return inspect(String(args.path));
     case "start_backup": return start("backup", String(args.deviceId));
     // Unified firmware task: both a normalized upgrade container and a

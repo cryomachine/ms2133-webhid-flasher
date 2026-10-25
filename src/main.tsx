@@ -492,8 +492,8 @@ function App() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [firmware, setFirmware] = useState<FirmwareInfo | null>(null);
-  const [flashSource, setFlashSource] = useState<"container" | "backup">("container");
-  const [task, setTask] = useState<"backup" | "flash">("backup");
+  const [flashSource, setFlashSource] = useState<"container" | "backup" | "factory">("container");
+  const [task, setTask] = useState<"backup" | "flash" | "factory">("backup");
   const [view, setView] = useState<"flasher" | "lab">("flasher");
   const [guideOpen, setGuideOpen] = useState(false);
   const [recovery, setRecovery] = useState<RecoverySummary>({ available: false });
@@ -581,14 +581,24 @@ function App() {
     catch (e) { fail(e); }
     finally { setPending(false); }
   };
-  const start = async (kind: "backup" | "flash") => {
+  const loadFactoryFirmware = async () => {
+    setPending(true); setError("");
+    setFirmware(null);
+    try {
+      const info = await invoke<FirmwareInfo>("load_factory_firmware");
+      setFlashSource("factory"); setFirmware(info);
+      log("已加载内置原厂 BIN；原厂直刷不会读取Flash或创建备份。", "success");
+    } catch (e) { fail(e); }
+    finally { setPending(false); }
+  };
+  const start = async (kind: "backup" | "flash" | "factory") => {
     const selected = firmware;
     if (!device || busy || (kind !== "backup" && !selected?.valid)) return;
     setPending(true); setError("");
     try {
       const result = kind === "backup"
         ? await invoke<OperationState>("start_backup", { deviceId: device.id })
-        : await invoke<OperationState>("start_firmware", { deviceId: device.id, firmwarePath: selected!.path });
+        : await invoke<OperationState>(kind === "factory" ? "start_restore" : "start_firmware", { deviceId: device.id, firmwarePath: selected!.path });
       setOperation(result);
     } catch (e) { fail(e); }
     finally { setPending(false); }
@@ -624,7 +634,7 @@ function App() {
   const progress = Math.max(0, Math.min(100, operation?.progress ?? 0));
   const writable = Boolean(device?.canWriteFlash && firmware?.valid && !busy);
   const canStart = task === "backup" ? Boolean(device?.canReadFlash && !busy) : writable;
-  const taskLabel = task === "backup" ? "备份当前固件" : "刷写固件";
+  const taskLabel = task === "backup" ? "备份当前固件" : task === "factory" ? "恢复原厂固件" : "刷写固件";
   return <div className="app">
     <header className="topbar">
       <div className="brand"><div className="brand-mark" aria-hidden="true"><svg className="brand-logo" viewBox="0 0 56 56" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 11h-7a1 1 0 0 0-1 1v7M37 11h7a1 1 0 0 1 1 1v7M45 37v7a1 1 0 0 1-1 1h-7M19 45h-7a1 1 0 0 1-1-1v-7"/><rect x="17" y="17" width="22" height="22" rx="6"/><path d="M28 23v10m-5-5h10"/><circle cx="42" cy="14" r="2.3" fill="currentColor" stroke="none"/></svg></div><div><h1>固件备份与刷写</h1><a className="brand-description repo-promo" href="https://github.com/cryomachine/ms2133-webhid-flasher" target="_blank" rel="noreferrer">开源项目 · 欢迎 Star 支持 OCAP V3 / MS2133</a></div></div>
@@ -652,14 +662,15 @@ function App() {
             <div className="task-grid" aria-label="任务">
               <button className={`task-card ${task === "backup" ? "selected" : ""}`} aria-pressed={task === "backup"} onClick={() => setTask("backup")} disabled={busy}><Icon name="download"/><strong>备份当前固件</strong><span>读取设备并保存完整备份</span></button>
               <button className={`task-card ${task === "flash" ? "selected" : ""}`} aria-pressed={task === "flash"} onClick={() => setTask("flash")} disabled={busy}><Icon name="upload"/><strong>刷写固件</strong><span>选择固件容器或完整备份</span></button>
+              <button className={`task-card ${task === "factory" ? "selected" : ""}`} aria-pressed={task === "factory"} onClick={() => { setTask("factory"); void loadFactoryFirmware(); }} disabled={busy}><Icon name="restore"/><strong>恢复原厂固件</strong><span>使用内置原厂 BIN 直接刷写</span></button>
             </div>
           </section>
           <section className="panel firmware-panel" aria-labelledby="file-heading">
-            <div className="section-heading"><div className="heading-title"><span className="step">03</span><h2 id="file-heading">{task === "backup" ? "准备备份" : "选择写入文件"}</h2></div><p className="section-note heading-note">{task === "backup" ? "当前备份任务不需要输入文件。" : "请选择固件容器或完整 Flash 备份。"}</p></div>
-            {task === "backup" ? <div className="backup-intro"><div className="intro-icon"><Icon name="download"/></div><div><h3>先保存设备当前的完整内容</h3><p>连续读取两遍并核对一致性。备份完成后下载文件，恢复包可在右侧单独导出。</p></div></div> : <><p className="section-note">选择要写入的文件：98,356 字节固件容器，或完整 Flash 备份。完整备份会自动提取启动容器并保留设备当前尾部。</p><div className="file-actions"><button className={`button ${flashSource === "container" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(false)} disabled={busy}><Icon name="file"/>选择固件容器</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(true)} disabled={busy}><Icon name="restore"/>选择完整备份</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void loadSavedBackup()} disabled={busy || (recovery.backupBytes ?? 0) < 98356}><Icon name="restore"/>使用本机已存备份</button></div><FirmwareCard info={firmware}/></>}
+            <div className="section-heading"><div className="heading-title"><span className="step">03</span><h2 id="file-heading">{task === "backup" ? "准备备份" : task === "factory" ? "准备原厂固件" : "选择写入文件"}</h2></div><p className="section-note heading-note">{task === "backup" ? "当前备份任务不需要输入文件。" : task === "factory" ? "使用网页内置的原厂 BIN，不读取设备、不创建备份。" : "请选择固件容器或完整 Flash 备份。"}</p></div>
+            {task === "backup" ? <div className="backup-intro"><div className="intro-icon"><Icon name="download"/></div><div><h3>先保存设备当前的完整内容</h3><p>连续读取两遍并核对一致性。备份完成后下载文件，恢复包可在右侧单独导出。</p></div></div> : task === "factory" ? <><p className="section-note">原厂固件由网页从 public/firmware/factory.bin 加载。已确认原厂接口时走直刷路径；其他可写接口继续使用标准校验流程。</p><div className="file-actions"><button className="button selected-source" onClick={() => void loadFactoryFirmware()} disabled={busy}><Icon name="restore"/>重新加载原厂 BIN</button></div><FirmwareCard info={firmware}/></> : <><p className="section-note">选择要写入的文件：98,356 字节固件容器，或完整 Flash 备份。完整备份会自动提取启动容器并保留设备当前尾部。</p><div className="file-actions"><button className={`button ${flashSource === "container" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(false)} disabled={busy}><Icon name="file"/>选择固件容器</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(true)} disabled={busy}><Icon name="restore"/>选择完整备份</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void loadSavedBackup()} disabled={busy || (recovery.backupBytes ?? 0) < 98356}><Icon name="restore"/>使用本机已存备份</button></div><FirmwareCard info={firmware}/></>}
             {task === "flash" && <p className="compatibility-note">导入的文件检查协议、容器和存储容量；校验通过不代表已验证板卡兼容。完整备份只提取启动镜像，保留设备当前尾部。</p>}
-            <div className="primary-action"><div><strong>{device ? device.product || "已选择采集卡接口" : "等待选择目标设备"}</strong><p>{task === "backup" ? "设备可读取时，即可开始双读备份。" : "写入前需完成备份保存；写入后回读校验。"}</p></div><button className="button primary-button" onClick={() => void start(task)} disabled={!canStart}><Icon name={task === "backup" ? "download" : "upload"}/>{pending || running ? "操作处理中" : taskLabel}</button></div>
-            <p className="action-note">{task === "backup" ? "操作期间保持 USB 连接，并留意右侧的备份保存提示。" : device?.canWriteFlash ? "擦写开始后，取消功能将锁定。保持设备供电，等待回读结果。" : "连接并选择通过协议探测的接口后，开放恢复与刷写。"}</p>
+            <div className="primary-action"><div><strong>{device ? device.product || "已选择采集卡接口" : "等待选择目标设备"}</strong><p>{task === "backup" ? "设备可读取时，即可开始双读备份。" : task === "factory" && device?.firmwareType === "stock" ? "确认原厂接口后直接刷写，不读取固件、不备份。" : task === "flash" && device?.firmwareType === "stock" ? "原厂接口将按原厂基线筛选变化扇区，不读取固件、不备份。" : "写入前需完成备份保存；写入后回读校验。"}</p></div><button className="button primary-button" onClick={() => void start(task)} disabled={!canStart}><Icon name={task === "backup" ? "download" : task === "factory" ? "restore" : "upload"}/>{pending || running ? "操作处理中" : taskLabel}</button></div>
+            <p className="action-note">{task === "backup" ? "操作期间保持 USB 连接，并留意右侧的备份保存提示。" : (task === "factory" || task === "flash") && device?.firmwareType === "stock" ? "原厂接口不会读取设备固件或创建备份；保持设备供电直到写入完成。" : device?.canWriteFlash ? "擦写开始后，取消功能将锁定。保持设备供电，等待回读结果。" : "连接并选择通过协议探测的接口后，开放恢复与刷写。"}</p>
           </section>
         </div>
         <aside className="status-column" aria-label="操作状态与恢复包">

@@ -54,7 +54,7 @@ function setup(savePicker, shared = {}) {
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 async function prepare(state, flash, command = "start_flash") {
-  state.api.registerWebHidDriver({ probe: async () => ({ canReadFlash: true, canWriteFlash: true, status: "reachable" }), backup: async () => fixture, flash });
+  state.api.registerWebHidDriver({ probe: async () => ({ canReadFlash: true, canWriteFlash: true, status: "reachable", firmwareType: command === "start_restore" ? "stock" : "roi" }), backup: async () => fixture, flash });
   const scan = await state.api.callBackend("scan_devices");
   const path = await state.api.callBackend("choose_firmware");
   await state.api.callBackend(command, { deviceId: scan.devices[0].id, firmwarePath: path });
