@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { callBackend as invoke, requestWebDevice, webMode } from "./backend";
 import "./webhid-protocol";
 import type { DeviceInfo, FirmwareInfo, FirmwareInterface, LogEntry, OperationState, ScanResult } from "./types";
-import type { RecoverySummary } from "./storage";
 import { runSixModeCaptureTest, SIX_CAPTURE_TEST_MODES } from "./video-mode-test";
 import type { SixCaptureTestResult, VideoModeDescriptor } from "./video-mode-test";
 import { matchesRequestedDimensions, normalizeReportedDimensions } from "./video-dimensions";
@@ -501,11 +500,10 @@ function App() {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [firmware, setFirmware] = useState<FirmwareInfo | null>(null);
-  const [flashSource, setFlashSource] = useState<"container" | "backup" | "factory">("container");
+  const [flashSource, setFlashSource] = useState<"container" | "backup" | "factory" | "latest">("container");
   const [task, setTask] = useState<"backup" | "flash" | "factory">("backup");
   const [view, setView] = useState<"flasher" | "lab">("flasher");
   const [guideOpen, setGuideOpen] = useState(false);
-  const [recovery, setRecovery] = useState<RecoverySummary>({ available: false });
   const [operation, setOperation] = useState<OperationState | null>(null);
   const [scanning, setScanning] = useState(false);
   const [pending, setPending] = useState(false);
@@ -558,9 +556,6 @@ function App() {
     if (container) container.scrollTop = container.scrollHeight;
   }, [operation?.logs.length, localLogs.length]);
   useEffect(() => {
-    void invoke<RecoverySummary>("get_recovery_summary").then(value => { if (mounted.current) setRecovery(value); }).catch(e => { if (mounted.current) fail(e); });
-  }, [operation?.backupPath, operation?.status, fail]);
-  useEffect(() => {
     if (!running) return;
     const leaving = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", leaving);
@@ -584,9 +579,9 @@ function App() {
     } catch (e) { fail(e); }
     finally { setPending(false); }
   };
-  const loadSavedBackup = async () => {
+  const loadLatestFirmware = async () => {
     setPending(true); setError("");
-    try { const info = await invoke<FirmwareInfo>("load_saved_backup"); setFlashSource("backup"); setFirmware(info); log("已加载本机保存的完整备份并校验启动容器；尚未执行写入。", "success"); }
+    try { const info = await invoke<FirmwareInfo>("load_latest_firmware"); setFlashSource("latest"); setFirmware(info); log("已加载最新ROI固件；更新模式不会读取或备份当前板载固件。", "success"); }
     catch (e) { fail(e); }
     finally { setPending(false); }
   };
@@ -607,7 +602,7 @@ function App() {
     try {
       const result = kind === "backup"
         ? await invoke<OperationState>("start_backup", { deviceId: device.id })
-        : await invoke<OperationState>(kind === "factory" ? "start_restore" : "start_firmware", { deviceId: device.id, firmwarePath: selected!.path });
+        : await invoke<OperationState>(kind === "factory" ? "start_restore" : "start_firmware", { deviceId: device.id, firmwarePath: selected!.path, latest: kind === "flash" && flashSource === "latest" });
       setOperation(result);
     } catch (e) { fail(e); }
     finally { setPending(false); }
@@ -633,17 +628,11 @@ function App() {
     } catch (e) { fail(e); }
     finally { setPending(false); }
   };
-  const exportRecovery = async () => {
-    setPending(true);
-    try { const path = await invoke<string>("export_recovery_package"); log(`恢复包已导出：${path}`, "success"); }
-    catch (e) { fail(e); }
-    finally { setPending(false); }
-  };
   const logs = [...localLogs, ...(operation?.logs ?? [])].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const progress = Math.max(0, Math.min(100, operation?.progress ?? 0));
   const writable = Boolean(device?.canWriteFlash && firmware?.valid && !busy);
   const canStart = task === "backup" ? Boolean(device?.canReadFlash && !busy) : writable;
-  const taskLabel = task === "backup" ? "备份当前固件" : task === "factory" ? "恢复原厂固件" : "刷写固件";
+  const taskLabel = task === "backup" ? "备份当前固件" : task === "factory" ? "恢复原厂固件" : flashSource === "latest" ? "更新至最新版本" : "刷写固件";
   return <div className="app">
     <header className="topbar">
       <div className="brand"><div className="brand-mark" aria-hidden="true"><svg className="brand-logo" viewBox="0 0 56 56" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 11h-7a1 1 0 0 0-1 1v7M37 11h7a1 1 0 0 1 1 1v7M45 37v7a1 1 0 0 1-1 1h-7M19 45h-7a1 1 0 0 1-1-1v-7"/><rect x="17" y="17" width="22" height="22" rx="6"/><path d="M28 23v10m-5-5h10"/><circle cx="42" cy="14" r="2.3" fill="currentColor" stroke="none"/></svg></div><div><h1>固件备份与刷写</h1><a className="brand-description repo-promo" href="https://github.com/cryomachine/ms2133-webhid-flasher" target="_blank" rel="noreferrer">开源项目 · 欢迎 Star 支持 OCAP V3 / MS2133</a></div></div>
@@ -678,7 +667,7 @@ function App() {
           </section>
           <section className="panel firmware-panel" aria-labelledby="file-heading">
             <div className="section-heading"><div className="heading-title"><span className="step">03</span><h2 id="file-heading">{task === "backup" ? "准备备份" : task === "factory" ? "准备原厂固件" : "选择写入文件"}</h2></div><p className="section-note heading-note">{task === "backup" ? "当前备份任务不需要输入文件。" : task === "factory" ? "使用网页内置的原厂 BIN。" : "请选择固件容器或完整 Flash 备份。"}</p></div>
-            {task === "backup" ? <div className="backup-intro"><div className="intro-icon"><Icon name="download"/></div><div><h3>先保存设备当前的完整内容</h3><p>连续读取两遍并核对一致性。备份完成后下载文件，恢复包可在右侧单独导出。</p></div></div> : task === "factory" ? <><p className="section-note">原厂固件由网页从 public/firmware/factory.bin 加载。</p><div className="file-actions"><button className="button selected-source" onClick={() => void loadFactoryFirmware()} disabled={busy}><Icon name="restore"/>重新加载原厂 BIN</button></div><FirmwareCard info={firmware}/></> : <><p className="section-note">选择要写入的文件：98,356 字节固件容器，或完整 Flash 备份。完整备份会自动提取启动容器并保留设备当前尾部。</p><div className="file-actions"><button className={`button ${flashSource === "container" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(false)} disabled={busy}><Icon name="file"/>选择固件容器</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(true)} disabled={busy}><Icon name="restore"/>选择完整备份</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void loadSavedBackup()} disabled={busy || (recovery.backupBytes ?? 0) < 98356}><Icon name="restore"/>使用本机已存备份</button></div><FirmwareCard info={firmware}/></>}
+            {task === "backup" ? <div className="backup-intro"><div className="intro-icon"><Icon name="download"/></div><div><h3>先保存设备当前的完整内容</h3><p>连续读取两遍并核对一致性。备份完成后下载文件，恢复包可在右侧单独导出。</p></div></div> : task === "factory" ? <><p className="section-note">原厂固件由网页从 public/firmware/factory.bin 加载。</p><div className="file-actions"><button className="button selected-source" onClick={() => void loadFactoryFirmware()} disabled={busy}><Icon name="restore"/>重新加载原厂 BIN</button></div><FirmwareCard info={firmware}/></> : <><p className="section-note">选择要写入的文件：98,356 字节固件容器，或完整 Flash 备份。完整备份会自动提取启动容器并保留设备当前尾部。</p><div className="file-actions"><button className={`button ${flashSource === "container" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(false)} disabled={busy}><Icon name="file"/>选择固件容器</button><button className={`button ${flashSource === "backup" ? "selected-source" : ""}`} onClick={() => void chooseFirmware(true)} disabled={busy}><Icon name="restore"/>选择完整备份</button><button className={`button ${flashSource === "latest" ? "selected-source" : ""}`} onClick={() => void loadLatestFirmware()} disabled={busy}><Icon name="upload"/>更新至最新版本</button></div><FirmwareCard info={firmware}/></>}
             {task === "flash" && <p className="compatibility-note">导入的文件检查协议、容器和存储容量；校验通过不代表已验证板卡兼容。完整备份只提取启动镜像，保留设备当前尾部。</p>}
             <div className="primary-action"><div><strong>{device ? device.product || "已选择采集卡接口" : "等待选择目标设备"}</strong><p>{task === "backup" ? "设备可读取时，即可开始双读备份。" : "确认文件后开始写入。"}</p></div><button className="button primary-button" onClick={() => void start(task)} disabled={!canStart}><Icon name={task === "backup" ? "download" : task === "factory" ? "restore" : "upload"}/>{pending || running ? "操作处理中" : taskLabel}</button></div>
             <p className="action-note">{task === "backup" ? "操作期间保持 USB 连接，并留意右侧的备份保存提示。" : device?.canWriteFlash ? "擦写开始后，取消功能将锁定。保持设备供电，等待写入结果。" : "连接并选择通过协议探测的接口后，开放恢复与刷写。"}</p>
@@ -694,11 +683,10 @@ function App() {
             {(operation?.backupPath || operation?.outputPath) && <details className="technical-details output-files"><summary>备份与输出位置</summary>{operation.backupPath && <p><strong>备份：</strong>{operation.backupPath}</p>}{operation.outputPath && <p><strong>输出：</strong>{operation.outputPath}</p>}</details>}
             <button className="button cancel-button" onClick={() => void cancel()} disabled={!running || !operation?.cancellable || pending}><Icon name="stop"/>{running && !operation?.cancellable ? "擦写开始后不可取消" : "取消操作"}</button>
           </section>
-          <section className="panel recovery-panel" aria-labelledby="recovery-heading"><div className="section-heading"><div className="heading-title"><Icon name="restore"/><h2 id="recovery-heading">本机恢复包</h2></div><span className={`status-pill ${recovery.available ? "reachable" : "enumerated"}`}>{recovery.available ? "已保存" : "待生成"}</span></div><p className="section-note">{recovery.available ? `${recovery.device ?? "MS2133"} · Flash 备份 ${size(recovery.backupBytes ?? 0)}。这是浏览器本地保存的完整备份和设备信息，可导出后作为后续恢复输入。` : "开始操作后，完整 Flash 备份和设备信息会保存在本机浏览器。"}</p><button className="button recovery-export" onClick={() => void exportRecovery()} disabled={pending || !recovery.available || Boolean(running && !operation?.backupSaveRequired)}><Icon name="download"/>导出恢复包</button><details className="technical-details"><summary>重连与恢复说明</summary><p>回读完成后，如设备需重新枚举，断开 USB 及 HDMI 所有供电再重连，点击“刷新设备”。原厂与 ROI 接口的报告结构可能不同。</p><p>设备仍需可枚举、可通信。ROM 接口出现不代表已支持写入；USB 层完全没有设备时，本工具没有可达的刷写入口。</p></details></section>
         </aside>
       </div>
       <section className="panel logs-panel" aria-labelledby="logs-heading"><div className="section-heading"><div className="heading-title"><h2 id="logs-heading">操作日志</h2><span className="quiet-tag">{logs.length} 条</span></div><button className="button small" onClick={() => void exportDiagnostics()} disabled={pending}><Icon name="export"/>导出诊断</button></div><div className="log-view" aria-live="polite" aria-relevant="additions text">{logs.length === 0 ? <p className="log-empty">尚无操作记录。设备扫描和任务执行信息会显示在这里。</p> : logs.map((entry, i) => <div className={`log-line ${entry.level}`} key={`${entry.timestamp}-${i}`}><time>{/^\d{4}-/.test(entry.timestamp) ? new Date(entry.timestamp).toLocaleTimeString("zh-CN", { hour12: false }) : entry.timestamp}</time><span>{entry.message}</span></div>)}<div ref={logEnd}/></div>{exportPath && <p className="export-path">诊断文件：{exportPath}</p>}</section>
-      <details className="panel usage-guide" id="usage-guide" open={guideOpen} onToggle={event => setGuideOpen(event.currentTarget.open)}><summary><span><Icon name="file"/><strong>使用说明与功能指南</strong></span><span className="summary-hint">连接 · 备份 · 刷写</span></summary><div className="guide-content"><div><h3>按四步开始</h3><ol><li><strong>连接设备。</strong>{webMode ? "使用桌面版 Chrome / Edge，点击“连接采集卡”并授权目标 HID 接口。" : "通过 USB 连接采集卡，点击“刷新设备”。"} 列表中的读写状态来自实际协议探测。</li><li><strong>选择任务。</strong>备份无需输入文件；刷写可导入固件容器、完整备份或加载当前浏览器已存备份。</li><li><strong>开始并保存备份。</strong>点击任务主按钮。出现保存提示后先下载备份，再明确确认已保存，后续操作才继续。</li><li><strong>查看结果。</strong>等待写入及回读校验完成，按需导出恢复包和诊断日志。需要重新枚举时，按“重连与恢复说明”操作。</li></ol></div><div><h3>文件与操作规则</h3><ul><li>升级容器为 98356 字节。整片 Flash 备份会提取开头的启动镜像，保留设备当前尾部。</li><li>恢复原厂任务使用内置原厂固件。导入文件和设备备份在浏览器本地处理，不上传服务器；固件仍需与实际板卡相符。</li><li>本机已存备份来自当前浏览器的本地存储；更换浏览器或清除站点数据后，需重新导入自己保存的文件。任何文件都不会自动刷写。</li><li>运行中会锁定设备、任务与文件选择。擦写开始后不可取消，页面关闭或刷新不会自动续写。</li><li>恢复能力取决于设备接口仍可通信，不承诺所有固件或无 USB 枚举设备均可恢复。</li></ul></div></div></details>
+      <details className="panel usage-guide" id="usage-guide" open={guideOpen} onToggle={event => setGuideOpen(event.currentTarget.open)}><summary><span><Icon name="file"/><strong>使用说明与功能指南</strong></span><span className="summary-hint">连接 · 备份 · 刷写</span></summary><div className="guide-content"><div><h3>按四步开始</h3><ol><li><strong>连接设备。</strong>{webMode ? "使用桌面版 Chrome / Edge，点击“连接采集卡”并授权目标 HID 接口。" : "通过 USB 连接采集卡，点击“刷新设备”。"} 列表中的读写状态来自实际协议探测。</li><li><strong>选择任务。</strong>备份无需输入文件；刷写可导入固件容器或完整备份，也可以加载内置最新 ROI 固件。</li><li><strong>开始操作。</strong>普通刷写会保存当前设备备份；“更新至最新版本”会跳过当前板载固件读取和备份，直接写入内置 ROI 镜像。</li><li><strong>查看结果。</strong>等待写入及回读校验完成。需要重新枚举时，按页面提示断电重连。</li></ol></div><div><h3>文件与操作规则</h3><ul><li>升级容器为 98356 字节。完整 Flash 备份会提取开头的启动镜像，保留设备当前尾部。</li><li>恢复原厂任务使用内置原厂固件；更新任务使用固定的 ROI_V0.10_1029 镜像。导入文件只在浏览器本地处理。</li><li>运行中会锁定设备、任务与文件选择。擦写开始后不可取消，页面关闭或刷新不会自动续写。</li><li>恢复能力取决于设备接口仍可通信，不承诺所有固件或无 USB 枚举设备均可恢复。</li></ul></div></div></details>
       <footer><span className="footer-dot"/>固件文件仅在本地处理</footer>
     </main>}
   </div>;

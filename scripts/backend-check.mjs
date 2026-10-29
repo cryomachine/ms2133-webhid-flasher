@@ -42,6 +42,7 @@ function setup(savePicker, shared = {}) {
     URL: { createObjectURL: () => "blob:test", revokeObjectURL() {} },
     Blob, Uint8Array, Date, Error, Promise, Map, WeakMap, TextEncoder, btoa,
     crypto: webcrypto,
+    fetch: async () => ({ ok: true, arrayBuffer: async () => makeSyntheticFlash().buffer }),
   };
   vm.runInNewContext(storageCode, sandbox);
   sandbox.exports = formatExports;
@@ -56,11 +57,11 @@ function setup(savePicker, shared = {}) {
   return { api: exports, writes, clicks, usbCalls, local, idb, attached, events, get requestDeviceOptions() { return requestDeviceOptions; }, runTimers() { for (const [id, handler] of [...timers]) { timers.delete(id); handler(); } } };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
-async function prepare(state, flash, command = "start_flash") {
+async function prepare(state, flash, command = "start_flash", options = {}) {
   state.api.registerWebHidDriver({ probe: async () => ({ canReadFlash: true, canWriteFlash: true, status: "reachable", firmwareType: command === "start_restore" ? "stock" : "roi" }), backup: async () => fixture, flash });
   const scan = await state.api.callBackend("scan_devices");
   const path = await state.api.callBackend("choose_firmware");
-  await state.api.callBackend(command, { deviceId: scan.devices[0].id, firmwarePath: path });
+  await state.api.callBackend(command, { deviceId: scan.devices[0].id, firmwarePath: path, latest: options.latest === true });
   await settle();
   assert.equal(state.attached.size, 0, "completed file input must be removed");
   return state;
@@ -165,6 +166,17 @@ await unified.api.callBackend("confirm_backup_saved");
 await settle();
 assert.equal(continued, true);
 assert.equal((await unified.api.callBackend("get_operation")).status, "complete");
+
+let latestDirect = false;
+const latest = await prepare(setup(false), async (_device, _image, context) => {
+  assert.equal(context.directImageWrite, true);
+  assert.equal(context.referenceImage?.length, 0x80000);
+  latestDirect = true;
+  return { verified: true };
+}, "start_firmware", { latest: true });
+await settle();
+assert.equal(latestDirect, true);
+assert.equal((await latest.api.callBackend("get_operation")).backupSaveRequired, undefined);
 
 continued = false;
 const fallback = await prepare(setup(false), async (_device, _image, context) => { await context.saveBackup(new Uint8Array([4]), "fallback.bin"); continued = true; return { verified: true }; });

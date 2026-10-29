@@ -1,4 +1,4 @@
-"""Reject binary artifacts except the explicitly bundled factory image."""
+"""Reject binary artifacts except the explicitly bundled factory/latest images."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -13,10 +13,14 @@ args = parser.parse_args()
 excluded = {"node_modules", ".git", "release", "dist", "build", "__pycache__"}
 blocked = {".bin", ".rom", ".hex", ".fw", ".img", ".dump", ".elf", ".exe",
            ".dll", ".so", ".dylib", ".zip", ".gz", ".tar", ".7z", ".uf2", ".hex32"}
-# The factory restore task deliberately ships this owner-selected image.
-# Pin its complete content; a renamed backup or replacement image must fail.
-factory_paths = {Path("public/firmware/factory.bin"), Path("dist/firmware/factory.bin")}
-factory_sha256 = "ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"
+# The restore and latest-update tasks deliberately ship owner-selected images.
+# Pin their complete content; a renamed backup or replacement image must fail.
+allowed_firmware = {
+    Path("public/firmware/factory.bin"): (524288, "ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"),
+    Path("dist/firmware/factory.bin"): (524288, "ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"),
+    Path("public/firmware/ROI_V0.10_1029.bin"): (98356, "3517646d64c7409df7a05017a716e2d009666b887f9904c87cdf9b148ab5d6f6"),
+    Path("dist/firmware/ROI_V0.10_1029.bin"): (98356, "3517646d64c7409df7a05017a716e2d009666b887f9904c87cdf9b148ab5d6f6"),
+}
 files = set()
 # Do not inspect a parent workspace's Git index.
 if (root / ".git").exists():
@@ -40,10 +44,11 @@ for relative in sorted(files):
     if file.is_symlink():
         errors.append(f"{relative}: symlink is not a source file")
         continue
-    if relative in factory_paths and file.is_file():
+    if relative in allowed_firmware and file.is_file():
         data = file.read_bytes()
-        if len(data) != 524288 or hashlib.sha256(data).hexdigest() != factory_sha256:
-            errors.append(f"{relative}: bundled factory size/SHA-256 mismatch")
+        expected_size, expected_hash = allowed_firmware[relative]
+        if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_hash:
+            errors.append(f"{relative}: bundled firmware size/SHA-256 mismatch")
         continue
     if relative.suffix.lower() in blocked:
         errors.append(f"{relative}: binary/firmware extension")
@@ -62,4 +67,4 @@ for relative in sorted(files):
 if errors:
     print("Source-only check FAILED:\n" + "\n".join(errors), file=sys.stderr)
     sys.exit(1)
-print(f"Source check passed: {len(files)} files; only the pinned factory image is allowed as binary.")
+print(f"Source check passed: {len(files)} files; only the pinned firmware images are allowed as binary.")

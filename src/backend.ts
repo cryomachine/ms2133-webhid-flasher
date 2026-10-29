@@ -60,6 +60,13 @@ const idle: OperationState = { kind: "idle", status: "idle", phase: "", progress
 const MS2133_VENDOR_ID = 0x345f;
 const MS2133_PRODUCT_ID = 0x2133;
 const ROM_PRODUCT_ID = 0x0001;
+function firmwareUrl(file: string): string {
+  // Resolve against the deployed page so GitHub Pages project paths and the
+  // local Vite server both find the bundled firmware assets.
+  if (typeof URL !== "function") return `/firmware/${file}`;
+  const base = typeof document === "undefined" || !document.baseURI ? "http://localhost/" : document.baseURI;
+  return new URL(`firmware/${file}`, base).toString();
+}
 
 function browserHid(): BrowserHid {
   if (!window.isSecureContext) throw new Error("WebHID需要安全上下文。请使用HTTPS或localhost打开网页。");
@@ -201,7 +208,7 @@ async function loadSavedBackup(): Promise<FirmwareInfo> {
   return { ...info, target: "MS2133 · 本机已存备份" };
 }
 async function loadFactoryFirmware(): Promise<FirmwareInfo> {
-  const response = await fetch("/firmware/factory.bin", { cache: "no-store" });
+  const response = await fetch(firmwareUrl("factory.bin"), { cache: "no-store" });
   if (!response.ok) throw new Error("网页内尚未挂载原厂固件：请将原厂 BIN 放入 public/firmware/factory.bin 后重新加载页面。");
   const source = new Uint8Array(await response.arrayBuffer());
   const path = `factory-${++fileSequence}/factory.bin`;
@@ -216,9 +223,24 @@ async function loadFactoryFirmware(): Promise<FirmwareInfo> {
     throw new Error(`内置原厂 BIN 校验失败：${error instanceof Error ? error.message : String(error)}`);
   }
 }
+async function loadLatestFirmware(): Promise<FirmwareInfo> {
+  const response = await fetch(firmwareUrl("ROI_V0.10_1029.bin"), { cache: "no-store" });
+  if (!response.ok) throw new Error("网页内尚未挂载最新ROI固件，请重新加载页面或等待发布完成。");
+  const source = new Uint8Array(await response.arrayBuffer());
+  const path = `latest-${++fileSequence}/ROI_V0.10_1029.bin`;
+  sourceSizes.set(path, source.length); files.set(path, source);
+  try {
+    const info = await inspect(path);
+    if (!info.valid) throw new Error(info.errors.join("；"));
+    return { ...info, target: "MS2133 · 最新ROI固件" };
+  } catch (error) {
+    files.delete(path); sourceSizes.delete(path);
+    throw new Error(`最新ROI固件校验失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 async function loadFactoryReference(): Promise<Uint8Array | undefined> {
   if (typeof fetch !== "function") return undefined;
-  const response = await fetch("/firmware/factory.bin", { cache: "no-store" });
+  const response = await fetch(firmwareUrl("factory.bin"), { cache: "no-store" });
   if (!response.ok) return undefined;
   const source = new Uint8Array(await response.arrayBuffer());
   // Keep the complete factory image as the direct-write baseline.  The
@@ -293,7 +315,7 @@ function completeBackupSave(): void {
   if (current) saveOperation(current);
   pending.resolve();
 }
-async function start(kind: "backup" | "flash" | "restore", deviceId: string, path?: string): Promise<OperationState> {
+async function start(kind: "backup" | "flash" | "restore", deviceId: string, path?: string, directUpdate = false): Promise<OperationState> {
   if (current?.status === "running") throw new Error("已有操作进行中。");
   if (!driver) throw new Error("真实刷写协议尚未加载，操作未执行。");
   const device = devices.get(deviceId);
@@ -317,7 +339,7 @@ async function start(kind: "backup" | "flash" | "restore", deviceId: string, pat
   // firmware. A normalized full backup still needs the normal read/backup
   // path so its saved tail remains the target instead of being replaced by
   // the bundled factory tail.
-  const directImageWrite = kind === "restore" ||
+  const directImageWrite = directUpdate || kind === "restore" ||
     (kind === "flash" && scanned?.firmwareType === "stock" && (firmware?.sourceSize ?? firmware?.size) === 0x18034);
   const referenceImage = directImageWrite ? await loadFactoryReference() : undefined;
   const next: OperationState = { ...idle, id, kind, status: "running", phase: "准备", message: "准备与设备通信", cancellable: true, logs: [], destructiveStarted: false, firmwareSha256: firmware?.sha256, target: scanned?.product ?? "MS2133", directImageWrite };
@@ -364,14 +386,15 @@ async function webCall(command: string, args: Record<string, unknown>): Promise<
     case "choose_restore": return chooseFile(true);
     case "load_saved_backup": return loadSavedBackup();
     case "load_factory_firmware": return loadFactoryFirmware();
+    case "load_latest_firmware": return loadLatestFirmware();
     case "inspect_firmware": return inspect(String(args.path));
     case "start_backup": return start("backup", String(args.deviceId));
     // Unified firmware task: both a normalized upgrade container and a
     // complete backup (already reduced by choose_restore/load_saved_backup)
     // use the same verified Flash transaction. Keep the legacy commands below
     // for saved operation records and older clients.
-    case "start_firmware": return start("flash", String(args.deviceId), String(args.firmwarePath));
-    case "start_flash": return start("flash", String(args.deviceId), String(args.firmwarePath));
+    case "start_firmware": return start("flash", String(args.deviceId), String(args.firmwarePath), args.latest === true);
+    case "start_flash": return start("flash", String(args.deviceId), String(args.firmwarePath), args.latest === true);
     case "start_restore": return start("restore", String(args.deviceId), String(args.firmwarePath));
     case "get_recovery_summary": return recoverySummary();
     case "export_recovery_package": {

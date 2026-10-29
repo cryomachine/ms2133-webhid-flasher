@@ -1,1 +1,1 @@
-{"schema":1,"factory":{"file":"factory.bin","label":"原厂固件","sourceSize":524288,"imageSize":98356,"sha256":"ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"},"firmwares":[]}
+{"schema":1,"factory":{"file":"factory.bin","label":"原厂固件","sourceSize":524288,"imageSize":98356,"sha256":"ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"},"firmwares":[],"latest":{"file":"ROI_V0.10_1029.bin","label":"最新ROI固件","sourceSize":98356,"imageSize":98356,"sha256":"3517646d64c7409df7a05017a716e2d009666b887f9904c87cdf9b148ab5d6f6"}}

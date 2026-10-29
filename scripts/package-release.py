@@ -1,4 +1,4 @@
-"""Package the browser source with only the pinned factory firmware."""
+"""Package the browser source with only the pinned firmware images."""
 from pathlib import Path
 import hashlib
 import json
