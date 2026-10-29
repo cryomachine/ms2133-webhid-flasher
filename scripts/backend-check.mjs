@@ -6,7 +6,7 @@ import ts from "typescript";
 import { CONTAINER_SIZE, makeSyntheticContainer, makeSyntheticFlash } from "../tests/synthetic-firmware.mjs";
 
 const compile = name => ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS } }).outputText;
-const backendCode = compile("backend"), storageCode = compile("storage");
+const backendCode = compile("backend"), storageCode = compile("storage"), formatCode = compile("firmware-format");
 const fixture = makeSyntheticContainer();
 function memoryDatabase(records = new Map(), fail = false) {
   const database = {
@@ -31,7 +31,7 @@ function setup(savePicker, shared = {}) {
     open: async () => unexpectedUsb("open"), close: async () => unexpectedUsb("close"),
     sendFeatureReport: async () => unexpectedUsb("sendFeatureReport"), receiveFeatureReport: async () => unexpectedUsb("receiveFeatureReport"),
   };
-  const storageExports = {}, exports = {};
+  const storageExports = {}, formatExports = {}, exports = {};
   const sandbox = {
     exports: storageExports,
     window: { isSecureContext: true, indexedDB: idb, addEventListener: (name, handler) => events.set(name, handler), removeEventListener: name => events.delete(name), setTimeout: (handler) => { const id = timers.size + 1; timers.set(id, handler); return id; }, clearTimeout: id => timers.delete(id), ...(savePicker ? { showSaveFilePicker: async () => ({ createWritable: async () => ({ write: async bytes => writes.push(bytes.length), close: async () => writes.push("closed") }) }) } : {}) },
@@ -44,9 +44,12 @@ function setup(savePicker, shared = {}) {
     crypto: webcrypto,
   };
   vm.runInNewContext(storageCode, sandbox);
+  sandbox.exports = formatExports;
+  vm.runInNewContext(formatCode, sandbox);
   sandbox.exports = exports;
   sandbox.require = name => {
     if (name === "./storage") return storageExports;
+    if (name === "./firmware-format") return formatExports;
     assert.fail(`Unexpected backend dependency: ${name}`);
   };
   vm.runInNewContext(backendCode, sandbox);

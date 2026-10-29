@@ -2,7 +2,7 @@
 
 基于浏览器 WebHID 的 MS2133 工具。使用 HTTPS 在线页面即可完成设备授权、现有协议操作和采集预览；不再提供本地启动器或桌面应用。
 
-**内置一份指定板卡的原厂固件，用于“恢复原厂固件”和完整扇区基线。** `public/firmware/factory.bin` 为 512 KiB，SHA-256 为 `29139f8cb6d9671a605d4e2789a7dbfb8d311534b5d11219ff9d32c2715077f8`；发布检查仅允许这份固定内容的 BIN。其他固件、设备备份和恢复包不会随站点分发；用户导入文件在浏览器本地处理，不上传服务器。
+**内置一份指定板卡的原厂固件，用于“恢复原厂固件”和完整扇区基线。** `public/firmware/factory.bin` 为 512 KiB，SHA-256 为 `ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7`；发布检查仅允许这份固定内容的 BIN。其他固件、设备备份和恢复包不会随站点分发；用户导入文件在浏览器本地处理，不上传服务器。
 
 A browser-based MS2133 WebHID tool. Use the HTTPS site. A pinned factory image is bundled for restore; imported files and device backups stay in the browser.
 

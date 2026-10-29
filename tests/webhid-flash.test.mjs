@@ -45,6 +45,12 @@ async function run(device,context,image=modified()){await webHidDriver.probe(dev
 
 test('synthetic container validates and checks both sums/family/length',()=>{
   validateFirmwareContainer(baseline);
+  const roiVariant = baseline.slice();
+  roiVariant.set([0x26, 0x10, 0x25, 0x00], 12);
+  validateFirmwareContainer(roiVariant);
+  const unknownVariant = baseline.slice();
+  unknownVariant.set([0x99, 0x99, 0x99, 0x99], 12);
+  assert.throws(()=>validateFirmwareContainer(unknownVariant), /变体/);
   for(const offset of [0,8,0x30,0x18030,0x18032]){const b=baseline.slice();b[offset]^=1;assert.throws(()=>validateFirmwareContainer(b));}
   assert.throws(()=>validateFirmwareContainer(baseline.subarray(0,50)));
 });

@@ -16,7 +16,7 @@ blocked = {".bin", ".rom", ".hex", ".fw", ".img", ".dump", ".elf", ".exe",
 # The factory restore task deliberately ships this owner-selected image.
 # Pin its complete content; a renamed backup or replacement image must fail.
 factory_paths = {Path("public/firmware/factory.bin"), Path("dist/firmware/factory.bin")}
-factory_sha256 = "29139f8cb6d9671a605d4e2789a7dbfb8d311534b5d11219ff9d32c2715077f8"
+factory_sha256 = "ac6ab05cfa7dc643b79acfe4564e6a8bbffa9e19b11e14185d251dca782decd7"
 files = set()
 # Do not inspect a parent workspace's Git index.
 if (root / ".git").exists():

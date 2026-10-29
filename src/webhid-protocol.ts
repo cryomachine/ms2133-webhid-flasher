@@ -1,6 +1,7 @@
 import { registerWebHidDriver } from "./backend";
 import type { BrowserHidDevice, HidCollection, ProtocolContext, WebHidDriver } from "./backend";
 import type { DeviceInfo } from "./types";
+import { CONTAINER_SIZE, firmwareContainerErrors } from "./firmware-format";
 
 // Recovered from BFC9000 e980/e4a0, c1c0, dd50, d9a0 and e130.
 // WebHID sends report ID separately; receiveFeatureReport may retain it.
@@ -280,23 +281,14 @@ async function readPage(device: BrowserHidDevice, address: number): Promise<Uint
   if (data.subarray(1, 8).some(byte => byte !== 0)) throw new Error(`Flash读取状态非零，地址0x${address.toString(16)}`);
   return data.slice(8, 264);
 }
-const CONTAINER_SIZE = 0x18034;
 const WRITE_END = 0x19000;
 // No device-specific fingerprints are configured for the legacy builtin gate.
 // Keep the built-in recovery gate closed even if a caller requests that mode.
 const KNOWN_512K_TAIL: string | null = null;
 const KNOWN_BOOT_IMAGES = new Set<string>();
 export function validateFirmwareContainer(image: Uint8Array): void {
-  if (image.length !== CONTAINER_SIZE) throw new Error("固件必须为0x18034字节的MS2133容器；整片备份需先提取容器。");
-  const family = [0x3c,0xc3,0x80,0,0xff,0xff,0xff,0xff,0x80,0,0,2,0x1a,7,0x10,0x16];
-  if (family.some((byte, index) => image[index] !== byte)) throw new Error("固件容器家族头不符合当前支持的MS2133格式，未执行擦写。");
-  let headerSum = 0, codeSum = 0;
-  for (let index = 2; index < 12; index++) headerSum += image[index];
-  for (let index = 16; index < 48; index++) headerSum += image[index];
-  for (let index = 0x30; index < 0x18030; index++) codeSum += image[index];
-  if ((headerSum & 0xffff) !== (image[0x18030] << 8 | image[0x18031]) ||
-      (codeSum & 0xffff) !== (image[0x18032] << 8 | image[0x18033]))
-    throw new Error("固件容器校验和错误，未执行擦写。");
+  const errors = firmwareContainerErrors(image);
+  if (errors.length) throw new Error(`${errors.join("；")} 未执行擦写。`);
 }
 async function sha256(data: Uint8Array): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", data.slice().buffer as ArrayBuffer);

@@ -1,6 +1,7 @@
 import type { DeviceInfo, FirmwareInfo, LogEntry, OperationState, ScanResult } from "./types";
 import { getRecovery, loadOperation, putRecovery, recoverySummary, saveOperation } from "./storage";
 import type { RecoveryRecord } from "./storage";
+import { CONTAINER_SIZE, firmwareContainerErrors } from "./firmware-format";
 
 export interface HidReportItem { reportSize: number; reportCount: number; }
 export interface HidReport { reportId: number; items: HidReportItem[]; }
@@ -163,19 +164,21 @@ async function inspect(path: string): Promise<FirmwareInfo> {
   const data = files.get(path);
   if (!data) throw new Error("网页未保存这个文件，请重新选择。");
   const errors: string[] = [];
-  const format = data.length === 0x18034 ? "MS2133固件容器" : "未支持的文件结构";
-  if (data.length !== 0x18034) errors.push("当前写入入口只接受98,356字节的MS2133容器。");
-  if (data[0] !== 0x3c || data[1] !== 0xc3) errors.push("固件签名不是3C C3。");
+  const format = data.length === CONTAINER_SIZE ? "MS2133固件容器" : "未支持的文件结构";
+  if (data.length !== CONTAINER_SIZE) errors.push("当前写入入口只接受98,356字节的MS2133容器。");
   let headerChecksumValid = false, payloadChecksumValid = false;
-  if (data.length === 0x18034) {
+  if (data.length === CONTAINER_SIZE) {
     let h = 0, c = 0;
     for (let i = 2; i < 12; i++) h += data[i];
     for (let i = 16; i < 48; i++) h += data[i];
-    for (let i = 48; i < data.length - 4; i++) c += data[i];
+    for (let i = 0x30; i < data.length - 4; i++) c += data[i];
     headerChecksumValid = (h & 0xffff) === (data[data.length - 4] << 8 | data[data.length - 3]);
     payloadChecksumValid = (c & 0xffff) === (data[data.length - 2] << 8 | data[data.length - 1]);
     if (!headerChecksumValid) errors.push("头部校验和不匹配。");
     if (!payloadChecksumValid) errors.push("固件载荷校验和不匹配。");
+    for (const error of firmwareContainerErrors(data)) {
+      if (!errors.includes(error) && !error.includes("校验和")) errors.push(error);
+    }
   }
   const digest = await crypto.subtle.digest("SHA-256", data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
   const sha256 = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
